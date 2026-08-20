@@ -1,22 +1,18 @@
-# optimize-engine — configurazione
-# Provider LLM OpenAI-compatible (assunzione A1)
+# Elysium Agent — agent harness (chat + loop multi-agente)
 llm:
   provider: opencode-go
   base_url: "https://opencode.ai/zen/go/v1"
   model: deepseek-v4-flash
-  api_key_env: OPTIMIZE_ENGINE_API_KEY   # valorizzata con OPENCODE_API_KEY
+  api_key_env: OPTIMIZE_ENGINE_API_KEY   # valorizzata con OPENCODE_GO_API_KEY
   max_retries: 3
   timeout_s: 300
 
-engine:
-  max_concurrent: 10
-  max_rounds: 3
+harness:
+  max_concurrent: 8        # agenti paralleli nel loop
+  max_retries: 2           # retry per task sotto soglia
   quality_threshold: 7.0
-  summary_cap_tokens:
-    tier2: 500
-    tier3: 1000
-    tier4: 2000
+  projects_dir: "projects" # workspace dei progetti (relativa alla root)
 
-sandbox:
-  timeout_s: 60
-  workdir: ".sandbox"
+server:
+  host: "127.0.0.1"
+  port: 8137

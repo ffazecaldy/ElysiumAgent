@@ -1,160 +1,137 @@
-"""api/routes.py — endpoint REST + background loop del Gauntlet.
+"""api/routes.py — endpoint REST + SSE per l'harness Elysium Agent.
 
-Macchina a stati:
-  pending_confirmation → running → awaiting_approval → running
-  → completed | stopped | quota_exhausted | failed
-
-Check-in per-round NON bloccante: il Gauntlet attende su asyncio.Event che
-viene settato SOLO via POST /runs/{id}/continue (mai input(), mai auto-advance).
+Progetti, chat (SSE streaming), file del workspace, storico run.
+Vedi CONTRACT.md per lo schema esatto.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from api import factory
-from api.store import store
-from engine.state import is_tier1_fast_path
+from api.client_factory import get_llm
+from harness.chat import ChatAgent
+from harness.projects import ProjectStore
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/runs")
+router = APIRouter(prefix="/api")
+store = ProjectStore()
 
 
-class RunRequest(BaseModel):
-    goal: str = Field(min_length=1)
-    bar: str = Field(default="pytest", pattern="^(pytest|perf)$")
-    max_rounds: int = Field(default=3, ge=1, le=10)
+class ProjectCreate(BaseModel):
+    name: str = Field(min_length=1)
 
 
-@router.post("")
-async def create_run(req: RunRequest):
-    tier = factory.detect_tier_for(req.goal)
-    estimate = factory.estimate_tokens_for(req.goal, req.max_rounds)
-    run = store.create(
-        goal=req.goal,
-        bar=req.bar,
-        max_rounds=req.max_rounds,
-        estimate_tokens=estimate,
-        tier=tier,
-    )
-    # Phase 0.7a: stima token PRIMA di qualunque dispatch
-    return {"id": run.id, "status": run.status, "estimate_tokens": estimate,
-            "tier": tier, "max_rounds": run.max_rounds}
+class ChatMessage(BaseModel):
+    message: str = Field(min_length=1)
 
 
-async def _run_background(run_id: str) -> None:
-    """Task asincrono che esegue il Gauntlet e aggiorna lo store."""
-    run = store.get(run_id)
-    if run is None:
-        return
-    workspace = factory.run_workspace(run_id)
-    adapter = store.adapter_for(run)
-    g = factory.build_gauntlet(
-        goal=run.goal, bar=run.bar, max_rounds=run.max_rounds,
-        workspace=workspace, status_store=adapter,
-        approval_event=run.approval_event, stop_event=run.stop_event,
-    )
-    try:
-        report = await g.run(goal=run.goal, workspace=workspace, run_id=run_id,
-                             approval_event=run.approval_event,
-                             stop_event=run.stop_event)
-        await store.set_status(run_id, run.status, report)
-    except Exception as exc:  # noqa: BLE001
-        name = type(exc).__name__
-        status = "quota_exhausted" if name == "QuotaExhaustedError" else "failed"
-        run.exception = f"{name}: {exc}"
-        await store.set_status(run_id, status, {"error": str(exc)})
-        log.exception("run %s failed", run_id)
+# ── progetti ───────────────────────────────────────────────────
+@router.get("/projects")
+async def list_projects():
+    projects = store.list()
+    return {"projects": [
+        {"id": p.id, "name": p.name, "created_at": p.created_at,
+         "files_count": len(store.list_files(p))}
+        for p in projects
+    ]}
 
 
-@router.post("/{run_id}/confirm")
-async def confirm_run(run_id: str):
-    run = store.get(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="run non trovato")
-
-    # Tier 1 fast-path (A2): niente loop, eseguo direttamente
-    if is_tier1_fast_path(run.tier):
-        report = {"run_id": run_id, "goal": run.goal, "bar_beaten": True,
-                  "rounds": 0, "budget_hit": False, "stopped": False,
-                  "rounds_detail": [], "tokens_used": 0,
-                  "fast_path": True,
-                  "note": "tier 1: esecuzione diretta senza loop"}
-        await store.set_status(run_id, "completed", report)
-        return {"id": run_id, "status": "completed", "fast_path": True}
-
-    if run.status != "pending_confirmation":
-        raise HTTPException(status_code=409, detail=f"stato attuale: {run.status}")
-
-    await store.set_status(run_id, "running")
-    asyncio.create_task(_run_background(run_id))
-    return {"id": run_id, "status": "running"}
+@router.post("/projects", status_code=201)
+async def create_project(req: ProjectCreate):
+    p = store.create(req.name)
+    return {"id": p.id, "name": p.name, "created_at": p.created_at}
 
 
-@router.post("/{run_id}/continue")
-async def continue_run(run_id: str):
-    run = store.get(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="run non trovato")
-    if run.status not in ("awaiting_approval", "running"):
-        raise HTTPException(status_code=409, detail=f"stato attuale: {run.status}")
-    run.stop_event.clear()
-    run.approval_event.set()   # sblocca il check-in per-round (Phase 0.7c)
-    if run.status == "awaiting_approval":
-        await store.set_status(run_id, "running")
-    return {"id": run_id, "status": run.status}
+@router.get("/projects/{pid}")
+async def get_project(pid: str):
+    p = store.get(pid)
+    if not p:
+        raise HTTPException(404, "progetto non trovato")
+    return {"id": p.id, "name": p.name, "created_at": p.created_at,
+            "files": store.list_files(p),
+            "runs": store.list_runs(p)}
 
 
-@router.post("/{run_id}/stop")
-async def stop_run(run_id: str):
-    run = store.get(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="run non trovato")
-    if run.status not in ("running", "awaiting_approval", "pending_confirmation"):
-        raise HTTPException(status_code=409, detail=f"stato attuale: {run.status}")
-    run.stop_event.set()        # il loop esce pulito a fine round
-    if run.status == "awaiting_approval":
-        run.approval_event.set()  # sblocca l'attesa per far arrivare il loop a stop
-        await store.set_status(run_id, "stopped")
-    else:
-        await store.set_status(run_id, "running")
-    return {"id": run_id, "status": "stopping"}
+@router.delete("/projects/{pid}", status_code=204)
+async def delete_project(pid: str):
+    if not store.delete(pid):
+        raise HTTPException(404, "progetto non trovato")
+    return None
 
 
-@router.get("/{run_id}")
-async def get_run(run_id: str):
-    run = store.get(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="run non trovato")
-    return run.snapshot()
+# ── chat ───────────────────────────────────────────────────────
+@router.get("/projects/{pid}/chat")
+async def get_chat(pid: str):
+    p = store.get(pid)
+    if not p:
+        raise HTTPException(404, "progetto non trovato")
+    return {"messages": store.read_chat(p)}
 
 
-@router.get("/{run_id}/events")
-async def get_events(run_id: str):
-    """Coda eventi per il progress live (polling UI, ~2s)."""
-    run = store.get(run_id)
-    if run is None:
-        raise HTTPException(status_code=404, detail="run non trovato")
-    snap = run.snapshot()
-    return {
-        "id": run_id,
-        "status": snap["status"],
-        "events": snap["events"],
-        "last_update": snap["last_update"],
-        "estimate_tokens": snap["estimate_tokens"],
-        "tokens_used": snap["tokens_used"],
-    }
+@router.post("/projects/{pid}/chat")
+async def chat(pid: str, req: ChatMessage):
+    p = store.get(pid)
+    if not p:
+        raise HTTPException(404, "progetto non trovato")
+    llm = get_llm()
+    agent = ChatAgent(llm=llm, project=p, store=store)
+
+    async def gen():
+        try:
+            async for ev in agent.respond_stream(req.message):
+                yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
+        except Exception as exc:  # noqa: BLE001
+            log.exception("chat SSE fallita")
+            yield f"data: {json.dumps({'type': 'error', 'detail': str(exc)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache",
+                                      "X-Accel-Buffering": "no"})
 
 
-@router.get("")
-async def list_runs():
-    # run recenti per localStorage: id, goal, status, tier
-    return {"runs": [
-        {"id": r.id, "goal": r.goal, "status": r.status, "tier": r.tier,
-         "created_at": r.created_at}
-        for r in store.all()
-    ], "total": len(store.all())}
+# ── file workspace ────────────────────────────────────────────
+@router.get("/projects/{pid}/files")
+async def list_files(pid: str):
+    p = store.get(pid)
+    if not p:
+        raise HTTPException(404, "progetto non trovato")
+    return {"files": store.list_files(p)}
+
+
+@router.get("/projects/{pid}/files/{path:path}")
+async def read_file(pid: str, path: str):
+    p = store.get(pid)
+    if not p:
+        raise HTTPException(404, "progetto non trovato")
+    res = store.read_file(p, path)
+    if not res.get("ok"):
+        raise HTTPException(404, res.get("error", "file non trovato"))
+    return res
+
+
+# ── run Elysium ───────────────────────────────────────────────
+@router.get("/projects/{pid}/runs")
+async def list_runs(pid: str):
+    p = store.get(pid)
+    if not p:
+        raise HTTPException(404, "progetto non trovato")
+    return {"runs": store.list_runs(p)}
+
+
+@router.get("/projects/{pid}/runs/{run_id}")
+async def get_run(pid: str, run_id: str):
+    import os
+    p = store.get(pid)
+    if not p:
+        raise HTTPException(404, "progetto non trovato")
+    path = os.path.join(p.runs_dir, f"{run_id}.json")
+    if not os.path.isfile(path):
+        raise HTTPException(404, "run non trovato")
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)

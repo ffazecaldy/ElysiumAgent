@@ -1,4 +1,7 @@
-"""api/main.py — app FastAPI: CORS + static mount + router."""
+"""api/main.py — app FastAPI dell'harness Elysium Agent.
+
+CORS + rotte API + static mount della UI web/.
+"""
 from __future__ import annotations
 
 import os
@@ -11,7 +14,7 @@ from api.routes import router
 
 WEB_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web")
 
-app = FastAPI(title="Optimize Engine", version="0.1.0")
+app = FastAPI(title="Elysium Agent", version="0.15.0-harness")
 
 app.add_middleware(
     CORSMiddleware,

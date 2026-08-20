@@ -130,3 +130,66 @@ class LLMClient:
         if self.last_response_tokens:
             return self.last_response_tokens
         return self.last_request_tokens
+
+    async def stream(self, messages: list[dict], max_tokens: Optional[int] = None):
+        """Chat streaming (SSE-like): yield chunk di testo del contenuto.
+
+        OpenAI-compatible: POST con stream=true, response `data: {...}` linee.
+        """
+        payload = {
+            "model": self.model,
+            "messages": messages,
+            "max_tokens": max_tokens or self._max_tokens_default,
+            "stream": True,
+        }
+        self.last_request_tokens = sum(len(str(m.get("content", ""))) // 3 for m in messages)
+        self.last_response_tokens = 0
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                async with self._client() as client:
+                    async with client.stream("POST", self._url, json=payload) as resp:
+                        status = resp.status_code
+                        body_text = (
+                            resp.headers.get("content-type", "") if status != 200 else ""
+                        )
+                        if status != 200:
+                            text = (await resp.aread()).decode("utf-8", errors="replace")
+                            if status == 429 and _is_quota_signal(status, resp.headers, text):
+                                raise QuotaExhaustedError(f"quota esaurita: {text[:300]}")
+                        if status >= 500 or status == 429:
+                            if attempt > self._max_retries:
+                                resp.raise_for_status()
+                            retry_after = resp.headers.get("Retry-After")
+                            delay = min(float(retry_after), self._max_retry_after_s) if retry_after else \
+                                self._retry_backoff_s * (2 ** (attempt - 1))
+                            await asyncio.sleep(delay)
+                            continue
+                        resp.raise_for_status()
+                        async for line in resp.aiter_lines():
+                            if not line or not line.startswith("data:"):
+                                continue
+                            data = line[5:].strip()
+                            if data == "[DONE]":
+                                return
+                            try:
+                                chunk = json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                            usage = chunk.get("usage") or {}
+                            if usage.get("total_tokens"):
+                                self.last_response_tokens = usage["total_tokens"]
+                            choices = chunk.get("choices") or []
+                            if not choices:
+                                continue
+                            delta = choices[0].get("delta") or {}
+                            piece = delta.get("content") or ""
+                            if piece:
+                                yield piece
+                        return
+            except httpx.TransportError as exc:
+                if attempt > self._max_retries:
+                    raise
+                await asyncio.sleep(self._retry_backoff_s * (2 ** (attempt - 1)))
+                continue
