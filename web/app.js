@@ -1,7 +1,14 @@
-/* Elysium Agent — SPA Alpine.js: state, progetti, SSE streaming, run. */
+/* Elysium Agent — SPA Alpine.js: stato, progetti, chat con stream live,
+   loop Elysium, pannello file (sola lettura) e vista run con dettaglio.
+
+   NESSUNA doppia append: il server salva la conversazione in chat.json;
+   il client mostra lo stream in `streamText` (variabile separata, non
+   dentro `messages`) e alla fine sincronizza `messages` sostituendo
+   l'array dall'archivio. Nessun messaggio viene ricopiato a mano. */
 
 const API = "/api";
 
+/* ── helper di formattazione ────────────────────────────────── */
 function smart(n) {
   if (n === null || n === undefined) return "0";
   const abs = Math.abs(n);
@@ -13,6 +20,51 @@ function smart(n) {
 function pct(x) {
   if (x === null || x === undefined) return "—";
   return Math.round(x * 100) + "%";
+}
+
+function fmtBytes(n) {
+  if (n === null || n === undefined || isNaN(n)) return "—";
+  if (n < 1024) return n + " B";
+  if (n < 1048576) return (n / 1024).toFixed(1).replace(".", ",") + " kB";
+  return (n / 1048576).toFixed(1).replace(".", ",") + " MB";
+}
+
+function fmtDate(ts) {
+  if (!ts) return "—";
+  const d = new Date(ts * 1000);
+  const pad = (x) => String(x).padStart(2, "0");
+  const giorno = d.toLocaleDateString("it-IT", { day: "2-digit", month: "short" });
+  return giorno + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+}
+
+function fmtDur(sec) {
+  if (sec === null || sec === undefined) return "—";
+  if (sec < 60) return Math.round(sec) + "s";
+  const m = Math.floor(sec / 60);
+  return m + "m " + Math.round(sec % 60) + "s";
+}
+
+function fileExt(path) {
+  const m = /\.([A-Za-z0-9]+)$/.exec(path || "");
+  return m ? m[1].toUpperCase().slice(0, 4) : "FILE";
+}
+
+function statusLabel(s) {
+  return ({ completed: "completata", partial: "parziale",
+            running: "in corso", failed: "fallita" })[s] || s || "—";
+}
+
+function statusClass(s) {
+  return ["completed", "partial", "running", "failed"].includes(s) ? s : "unknown";
+}
+
+/* stato derivato per la card run (la lista non espone final_status) */
+function runPill(r) {
+  const fpr = r.first_pass_rate;
+  if (fpr === null || fpr === undefined) return { label: "in corso", cls: "running" };
+  if (fpr >= 1) return { label: "completo", cls: "completed" };
+  if (fpr > 0) return { label: "parziale", cls: "partial" };
+  return { label: "fallito", cls: "failed" };
 }
 
 function esc(s) {
@@ -32,6 +84,7 @@ function mdToHtml(md) {
   return md;
 }
 
+/* ── componente Alpine ──────────────────────────────────────── */
 function app() {
   return {
     view: "chat",
@@ -43,11 +96,24 @@ function app() {
     busy: false,
     loopActive: false,
     loopTier: null,
+    streamText: "",          // testo stream in diretta (non in messages)
     error: null,
     loadingProjects: true,
-    _poll: null,
+    sidebarOpen: false,
 
-    smart, pct,
+    /* file viewer (sola lettura) */
+    viewer: { open: false, path: "", content: "", bytes: 0,
+              truncated: false, loading: false, error: null },
+    _viewerFocus: null,
+
+    /* run */
+    runs: [],
+    runsLoading: false,
+    expandedRun: null,
+    runDetail: null,
+
+    smart, pct, fmtBytes, fmtDate, fmtDur, fileExt,
+    statusLabel, statusClass, runPill,
 
     init() {
       this.loadProjects();
@@ -69,7 +135,6 @@ function app() {
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || "errore");
         this.projects = d.projects || [];
-        // auto-seleziona l'ultimo se non c'è selezione
         if (!this.current && this.projects.length) {
           await this.switchProject(this.projects[0].id);
         }
@@ -102,12 +167,29 @@ function app() {
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || "errore");
         this.current = d;
+        this.runs = d.runs || [];
+        this.expandedRun = null;
+        this.runDetail = null;
+        this.closeViewer(true); // senza ripristino focus
         const c = await (await fetch(API + `/projects/${id}/chat`)).json();
-        this.messages = c.messages || [];
+        this.messages = this.keyMessages(c.messages || []);
         this.error = null;
         this.view = "chat";
+        this.sidebarOpen = false;
         this.$nextTick(() => this.scrollBottom());
       } catch (e) { this.error = e.message; }
+    },
+
+    /* chiavi stabili: il DOM viene riusato da Alpine, quindi le animazioni
+       di ingresso partono solo per i messaggi realmente nuovi. */
+    keyMessages(msgs) {
+      return msgs.map((m, i) => ({ ...m, _key: (m.role || "?") + ":" + i }));
+    },
+
+    get sortedFiles() {
+      if (!this.current) return [];
+      return [...(this.current.files || [])]
+        .sort((a, b) => a.path.localeCompare(b.path, "it", { numeric: true }));
     },
 
     scrollBottom() {
@@ -117,15 +199,115 @@ function app() {
 
     renderMd(m) { return mdToHtml(m); },
 
-    /* ── invio + SSE ─────────────────────────────────────── */
+    /* ── navigazione ─────────────────────────────────────────── */
+    openChat() {
+      this.view = "chat";
+      this.sidebarOpen = false;
+      this.$nextTick(() => this.scrollBottom());
+    },
+
+    async openRuns() {
+      this.closeViewer(true);
+      this.view = "runs";
+      if (this.current) await this.loadRuns();
+      else this.runs = [];
+    },
+
+    toggleSidebar() { this.sidebarOpen = !this.sidebarOpen; },
+
+    /* ── file viewer ─────────────────────────────────────────── */
+    async openFile(path) {
+      if (!this.current) return;
+      this._viewerFocus = document.activeElement;
+      this.viewer = { open: true, path, content: "", bytes: 0,
+                      truncated: false, loading: true, error: null };
+      this.sidebarOpen = false;
+      this.$nextTick(() => {
+        const el = this.$refs.viewerClose;
+        if (el && el.focus) el.focus();
+      });
+      try {
+        const addr = path.split("/").map(encodeURIComponent).join("/");
+        const r = await fetch(`${API}/projects/${this.current.id}/files/${addr}`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || "impossibile leggere il file");
+        this.viewer.content = d.content || "";
+        this.viewer.bytes = (d.content || "").length;
+        this.viewer.truncated = !!d.truncated;
+      } catch (e) {
+        this.viewer.error = e.message;
+      } finally {
+        this.viewer.loading = false;
+      }
+    },
+
+    closeViewer(silent) {
+      this.viewer.open = false;
+      this.viewer.error = null;
+      if (!silent) {
+        this.$nextTick(() => {
+          const prev = this._viewerFocus;
+          if (prev && prev.isConnected && prev.focus) prev.focus();
+        });
+      }
+    },
+
+    /* ── run ─────────────────────────────────────────────────── */
+    async loadRuns() {
+      if (!this.current) { this.runs = []; return; }
+      this.runsLoading = true;
+      try {
+        const r = await fetch(`${API}/projects/${this.current.id}/runs`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || "errore caricamento run");
+        this.runs = d.runs || [];
+      } catch (e) { this.error = e.message; }
+      finally { this.runsLoading = false; }
+    },
+
+    async expandRun(run) {
+      if (!this.current) return;
+      if (this.expandedRun === run.id) {
+        this.expandedRun = null;
+        this.runDetail = null;
+        return;
+      }
+      this.expandedRun = run.id;
+      this.runDetail = null;
+      try {
+        const r = await fetch(`${API}/projects/${this.current.id}/runs/${run.id}`);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || "errore caricamento run");
+        this.runDetail = d;
+      } catch (e) { this.error = e.message; }
+    },
+
+    async refreshProject() {
+      if (!this.current) return;
+      try {
+        const [pr, pl] = await Promise.all([
+          fetch(API + "/projects/" + this.current.id),
+          fetch(API + "/projects"),
+        ]);
+        const d = await pr.json();
+        const dl = await pl.json();
+        if (pr.ok) { this.current = d; this.connected = true; }
+        if (dl.projects) this.projects = dl.projects;
+      } catch (e) { /* silenzioso */ }
+    },
+
+    /* ── invio + SSE ─────────────────────────────────────────── */
     async send() {
       const text = this.draft.trim();
       if (!text || this.busy) return;
       this.draft = "";
       this.error = null;
-      this.messages.push({ role: "user", content: text });
-      this.busy = true;
+      this.streamText = "";
       this.loopActive = false;
+      // eco utente locale; la chiave coincide con quella del sync,
+      // così il nodo viene riusato (niente doppia animazione)
+      this.messages.push({ role: "user", content: text, _key: "user:" + this.messages.length });
+      this.busy = true;
       this.scrollBottom();
 
       try {
@@ -142,7 +324,6 @@ function app() {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
-        let assistantText = "";
 
         while (true) {
           const { done, value } = await reader.read();
@@ -153,27 +334,24 @@ function app() {
           for (const part of parts) {
             const line = part.split("\n").find((l) => l.startsWith("data:"));
             if (!line) continue;
-            try {
-              const ev = JSON.parse(line.slice(5).trim());
-              this.handleEvent(ev);
-              if (ev.type === "chunk") assistantText += ev.text;
-            } catch (e) { /* salta eventi malformati */ }
+            let ev;
+            try { ev = JSON.parse(line.slice(5).trim()); } catch (e) { continue; }
+            this.handleEvent(ev);
           }
-        }
-        if (assistantText) {
-          // risposta già salvata dal server; aggiorna l'ultimo assistant se presente
-          const last = this.messages[this.messages.length - 1];
-          if (last && last.role === "assistant") last.content = assistantText;
         }
       } catch (e) {
         this.error = e.message;
       } finally {
         this.busy = false;
         this.loopActive = false;
-        // ricarica chat (report loop salvati dal server) + file
-        const c = await (await fetch(API + `/projects/${this.current.id}/chat`)).json();
-        this.messages = c.messages || [];
-        this.refreshProject();
+        // lo stream è già stato salvato dal server: ricarica l'archivio.
+        // L'array viene sostituito per intero → nessuna doppia append.
+        try {
+          const c = await (await fetch(API + `/projects/${this.current.id}/chat`)).json();
+          this.messages = this.keyMessages(c.messages || []);
+          await this.refreshProject();
+          if (this.view === "runs") await this.loadRuns();
+        } catch (e) { /* silenzioso */ }
         this.scrollBottom();
       }
     },
@@ -183,11 +361,14 @@ function app() {
         case "loop":
           this.loopActive = true;
           this.loopTier = ev.tier;
+          this.streamText = "";
           break;
         case "chunk":
-          break; // gestito dal buffer
+          this.streamText += ev.text;
+          this.scrollBottom();
+          break;
         case "report":
-          this.loopActive = false;
+          // loop completato: il riepilogo resta visibile finché `done`/sync
           break;
         case "error":
           this.error = ev.detail;
@@ -197,21 +378,6 @@ function app() {
           this.loopActive = false;
           break;
       }
-    },
-
-    async refreshProject() {
-      if (!this.current) return;
-      try {
-        const r = await fetch(API + "/projects/" + this.current.id);
-        const d = await r.json();
-        if (r.ok) { this.current = d; this.connected = true; }
-        await this.loadProjects();
-      } catch (e) { /* silenzioso */ }
-    },
-
-    async openRuns() {
-      if (this.current) await this.refreshProject();
-      this.view = "runs";
     },
   };
 }
