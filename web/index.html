@@ -35,6 +35,10 @@
             x-text="connected ? '● online' : '○ offline'"></span>
     </div>
     <nav aria-label="Vista principale">
+      <button class="btn ghost icon-only" @click="toggleTheme" :aria-label="'Passa a tema ' + (theme==='dark' ? 'chiaro' : 'scuro')"
+              :title="theme==='dark' ? 'Tema chiaro' : 'Tema scuro'">
+        <span x-text="theme==='dark' ? '☀' : '☾'" aria-hidden="true"></span>
+      </button>
       <button class="btn ghost" @click="openChat" :class="{active: view==='chat'}"
               :aria-current="view==='chat' ? 'true' : undefined" aria-label="Vai alla chat">Chat</button>
       <button class="btn ghost" @click="openRuns" :class="{active: view==='runs'}"
@@ -48,7 +52,11 @@
       <div class="sidebar-block">
         <div class="sidebar-head">
           <span class="eyebrow">Progetti</span>
-          <button class="btn icon-only mini" @click="openNewProject" aria-label="Crea un nuovo progetto">+</button>
+          <div class="head-actions">
+            <button class="btn icon-only mini" @click="openAttach" title="Collega una cartella esistente"
+                    aria-label="Collega una cartella esistente">📁</button>
+            <button class="btn icon-only mini" @click="openNewProject" aria-label="Crea un nuovo progetto">+</button>
+          </div>
         </div>
 
         <div class="loading" x-show="loadingProjects" role="status" aria-live="polite">
@@ -64,6 +72,7 @@
                 @keydown.enter="switchProject(p.id)">
               <span class="proj-dot" aria-hidden="true"></span>
               <span class="proj-name" x-text="p.name" :title="p.name"></span>
+              <span class="proj-link" x-show="p.attached" title="Cartella collegata" aria-label="cartella collegata">🔗</span>
               <span class="proj-count muted" x-text="p.files_count"></span>
             </li>
           </template>
@@ -316,6 +325,31 @@
         <div class="modal-actions">
           <button type="button" class="btn ghost" @click="cancelNewProject">Annulla</button>
           <button type="submit" class="btn primary" :disabled="!newProjectName.trim()">Crea progetto</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- modal collega cartella esistente -->
+  <div class="modal-backdrop" x-show="attachOpen" x-cloak x-transition.opacity.duration.200ms
+       @click.self="cancelAttach" @keydown.escape.window="cancelAttach">
+    <div class="modal" x-ref="attachPanel" @keydown.tab="trapFocus($event, 'attachPanel')"
+         role="dialog" aria-modal="true" aria-labelledby="at-title">
+      <h2 id="at-title" class="modal-title">Collega cartella esistente</h2>
+      <form @submit.prevent="confirmAttach">
+        <label for="at-name" class="field-label">Nome progetto</label>
+        <input id="at-name" type="text" x-model="attachName" x-ref="atNameInput"
+               maxlength="60" placeholder="es. il-mio-repo" autocomplete="off">
+        <label for="at-path" class="field-label">Percorso cartella</label>
+        <input id="at-path" type="text" x-model="attachPath"
+               placeholder="es. C:/Users/Admin/Progetti/mio-repo" autocomplete="off">
+        <p class="modal-hint">Il harness lavorerà in-place sulla cartella (leggi/scrivi file), senza toccare chat o storico in quel posto. Usa percorsi assoluti.</p>
+        <div class="error" x-show="attachError" x-text="attachError" role="alert"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" @click="cancelAttach">Annulla</button>
+          <button type="submit" class="btn primary" :disabled="!attachName.trim() || !attachPath.trim() || attachBusy">
+            <span x-show="!attachBusy">Collega</span><span x-show="attachBusy" class="spinner sm"></span>
+          </button>
         </div>
       </form>
     </div>

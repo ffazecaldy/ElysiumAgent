@@ -121,6 +121,16 @@ function app() {
     newProjectName: "",
     _modalFocus: null,
 
+    /* dialog collega cartella esistente */
+    attachOpen: false,
+    attachName: "",
+    attachPath: "",
+    attachBusy: false,
+    attachError: null,
+
+    /* tema (dark/light) persistente */
+    theme: "light",
+
     /* file viewer (sola lettura) */
     viewer: { open: false, path: "", content: "", bytes: 0,
               truncated: false, loading: false, error: null },
@@ -142,9 +152,24 @@ function app() {
     init() {
       this._pendingRestoreView = loadLS("elysium.view") === "runs" ? "runs" : null;
       this._restoreProject = loadLS("elysium.project");
+      /* tema persistente */
+      this.theme = loadLS("elysium.theme") === "dark" ? "dark" : "light";
+      this.applyTheme();
       this.loadProjects();
       this.pollHealth();
       setInterval(() => this.pollHealth(), 8000);
+    },
+
+    /* ── tema ───────────────────────────────────────────── */
+    applyTheme() {
+      document.documentElement.setAttribute("data-theme", this.theme);
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute("content", this.theme === "dark" ? "#0a0a0a" : "#ffffff");
+    },
+    toggleTheme() {
+      this.theme = this.theme === "dark" ? "light" : "dark";
+      saveLS("elysium.theme", this.theme);
+      this.applyTheme();
     },
 
     async pollHealth() {
@@ -206,9 +231,60 @@ function app() {
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || "errore");
-        this.projects.unshift({ id: d.id, name: d.name, files_count: 0 });
+        this.projects.unshift({ id: d.id, name: d.name, files_count: 0, attached: false });
         await this.switchProject(d.id);
       } catch (e) { this.error = e.message; }
+    },
+
+    /* ── collega cartella esistente ──────────────────────── */
+    openAttach() {
+      this._modalFocus = document.activeElement;
+      this.attachOpen = true;
+      this.attachName = "";
+      this.attachPath = "";
+      this.attachError = null;
+      this.sidebarOpen = false;
+      this.$nextTick(() => {
+        const el = this.$refs.atNameInput;
+        if (el && el.focus) el.focus();
+      });
+    },
+
+    cancelAttach() {
+      this.attachOpen = false;
+      this.attachName = "";
+      this.attachPath = "";
+      this.attachError = null;
+      this.$nextTick(() => {
+        const prev = this._modalFocus;
+        if (prev && prev.isConnected && prev.focus) prev.focus();
+      });
+    },
+
+    async confirmAttach() {
+      const name = this.attachName.trim();
+      const path = this.attachPath.trim();
+      if (!name || !path || this.attachBusy) return;
+      this.attachBusy = true;
+      this.attachError = null;
+      try {
+        const r = await fetch(API + "/projects/attach", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name, folder_path: path }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || "errore collegamento");
+        this.attachOpen = false;
+        this.attachName = "";
+        this.attachPath = "";
+        this.projects.unshift({ id: d.id, name: d.name, files_count: 0, attached: true });
+        await this.switchProject(d.id);
+      } catch (e) {
+        this.attachError = e.message;
+      } finally {
+        this.attachBusy = false;
+      }
     },
 
     /* focus trap generico: il Tab cicla dentro il pannello indicato */

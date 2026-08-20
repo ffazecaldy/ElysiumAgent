@@ -1,12 +1,18 @@
 """harness/projects.py — gestione progetti: workspace persistenti su disco.
 
-Ogni progetto = cartella con:
-- files/          → artefatti prodotti dagli agenti (codice, docs, ecc.)
-- chat.json       → conversazione persistente (messaggi user/assistant)
-- runs/           → storico run Elysium (report JSON)
+Ogni progetto = cartella metadata del harness con:
+- workspace/   → artefatti prodotti dagli agenti (codice, docs, ecc.)
+- chat.json    → conversazione persistente (messaggi user/assistant)
+- runs/        → storico run Elysium (report JSON)
+
+Due tipi di progetto:
+- NORMALE: workspace creato dal harness (projects/{slug}/workspace).
+- ATTACH: collegato a una CARTELLA ESISTENTE dell'utente (es. una repo).
+  Il workspace è la cartella utente in-place; il metadata (chat/runs) resta
+  isolato nel harness. IL DELETE NON TOCCA MAI la cartella utente.
 
 Struttura:
-  {ROOT}/{progetto}/files/
+  {ROOT}/{progetto}/workspace/     (normale)  |  {PATH_UTENTE} (attach)
   {ROOT}/{progetto}/chat.json
   {ROOT}/{progetto}/runs/{run_id}.json
 """
@@ -36,11 +42,16 @@ class Project:
     id: str
     name: str
     created_at: float
-    path: str
+    path: str                      # dir metadata (chat.json, runs/)
+    workspace: str | None = None   # dir file; se None → path/workspace (normale)
+    attached: bool = False         # True = workspace è una cartella esterna utente
+    source_path: str | None = None # path originale della cartella esterna
 
     @property
     def files_dir(self) -> str:
-        return os.path.join(self.path, "files")
+        if self.workspace:
+            return self.workspace
+        return os.path.join(self.path, "workspace")
 
     @property
     def chat_path(self) -> str:
@@ -71,24 +82,27 @@ class ProjectStore:
         idx = self._index()
         out = []
         for pid, meta in idx.items():
-            out.append(Project(
-                id=pid, name=meta.get("name", pid),
-                created_at=meta.get("created_at", 0),
-                path=meta.get("path", os.path.join(self.root, pid)),
-            ))
+            out.append(self._from_meta(pid, meta))
         out.sort(key=lambda p: p.created_at, reverse=True)
         return out
+
+    def _from_meta(self, pid: str, meta: dict) -> Project:
+        return Project(
+            id=pid,
+            name=meta.get("name", pid),
+            created_at=meta.get("created_at", 0),
+            path=meta.get("path", os.path.join(self.root, pid)),
+            workspace=meta.get("workspace"),
+            attached=bool(meta.get("attached", False)),
+            source_path=meta.get("source_path"),
+        )
 
     def get(self, project_id: str) -> Optional[Project]:
         idx = self._index()
         meta = idx.get(project_id)
         if not meta:
             return None
-        return Project(
-            id=project_id, name=meta.get("name", project_id),
-            created_at=meta.get("created_at", 0),
-            path=meta.get("path", os.path.join(self.root, project_id)),
-        )
+        return self._from_meta(project_id, meta)
 
     def create(self, name: str) -> Project:
         pid = _safe_slug(name)
@@ -99,20 +113,67 @@ class ProjectStore:
             pid = f"{base}-{n}"
             n += 1
         path = os.path.join(self.root, pid)
-        os.makedirs(os.path.join(path, "files"), exist_ok=True)
+        os.makedirs(os.path.join(path, "workspace"), exist_ok=True)
         os.makedirs(os.path.join(path, "runs"), exist_ok=True)
-        proj = Project(id=pid, name=name, created_at=time.time(), path=path)
-        idx[pid] = {"name": name, "created_at": proj.created_at, "path": path}
+        proj = Project(id=pid, name=name, created_at=time.time(),
+                       path=path, workspace=None, attached=False)
+        idx[pid] = {"name": name, "created_at": proj.created_at, "path": path,
+                    "attached": False}
         self._save_index(idx)
         self._write_chat(proj, [])
         return proj
+
+    def attach(self, name: str, folder_path: str) -> tuple[Project, Optional[str]]:
+        """Collega il progetto a una CARTELLA ESISTENTE dell'utente (in-place).
+
+        Il workspace è la cartella data; i metadata (chat/runs) restano isolati
+        nel harness. Ritorna (project, None) oppure (None, errore) se il path
+        non esiste o non è una directory.
+        """
+        folder_path = os.path.abspath(os.path.expanduser(folder_path))
+        if not os.path.isdir(folder_path):
+            return None, f"cartella non trovata o non è una directory: {folder_path}"
+        # non permettere di collegare la root stessa o una sottocartella del harness
+        root_norm = os.path.normcase(os.path.abspath(self.root))
+        folder_norm = os.path.normcase(folder_path)
+        if folder_norm == root_norm or folder_norm.startswith(root_norm + os.sep):
+            return None, "non puoi collegare la cartella interna del harness"
+
+        pid = _safe_slug(name)
+        base = pid
+        n = 2
+        idx = self._index()
+        while pid in idx:
+            pid = f"{base}-{n}"
+            n += 1
+        path = os.path.join(self.root, pid)  # metadata isolato nel harness
+        os.makedirs(path, exist_ok=True)
+        os.makedirs(os.path.join(path, "runs"), exist_ok=True)
+        proj = Project(id=pid, name=name, created_at=time.time(),
+                       path=path, workspace=folder_path, attached=True,
+                       source_path=folder_path)
+        idx[pid] = {"name": name, "created_at": proj.created_at, "path": path,
+                    "workspace": folder_path, "attached": True,
+                    "source_path": folder_path}
+        self._save_index(idx)
+        self._write_chat(proj, [])
+        return proj, None
 
     def delete(self, project_id: str) -> bool:
         idx = self._index()
         if project_id not in idx:
             return False
         import shutil
-        shutil.rmtree(idx[project_id]["path"], ignore_errors=True)
+        meta = idx[project_id]
+        # IMPORTANTE: se attachato, NON rimuovere mai la cartella utente
+        if meta.get("attached"):
+            # rimuovi solo il metadata del harness
+            if os.path.isdir(meta.get("path", "")) and \
+               os.path.normcase(os.path.abspath(meta["path"])).startswith(
+                   os.path.normcase(self.root) + os.sep):
+                shutil.rmtree(meta["path"], ignore_errors=True)
+        else:
+            shutil.rmtree(meta.get("path", ""), ignore_errors=True)
         del idx[project_id]
         self._save_index(idx)
         return True
@@ -142,15 +203,27 @@ class ProjectStore:
         return msg
 
     # ── files ───────────────────────────────────────────────
+    # esclusi dal browser workspace: cache/artefatti di build
+    EXCLUDED_PARTS = ("__pycache__", ".git", "node_modules", ".venv", ".pytest_cache",
+                      ".idea", ".vscode", "dist", "build")
+
+    def _ignore(self, rel: str) -> bool:
+        parts = rel.replace("\\", "/").split("/")
+        return any(p in self.EXCLUDED_PARTS for p in parts)
+
     def list_files(self, project: Project) -> list[dict]:
         out = []
         base = project.files_dir
         if not os.path.isdir(base):
             return out
-        for dirpath, _dirs, filenames in os.walk(base):
+        for dirpath, dirs, filenames in os.walk(base):
+            # pota le dir escluse durante la walk (evita di scendere in .git/.venv)
+            dirs[:] = [d for d in dirs if d not in self.EXCLUDED_PARTS]
             for fn in sorted(filenames):
                 full = os.path.join(dirpath, fn)
                 rel = os.path.relpath(full, base)
+                if self._ignore(rel):
+                    continue
                 try:
                     stat = os.stat(full)
                 except OSError:

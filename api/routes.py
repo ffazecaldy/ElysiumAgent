@@ -27,6 +27,11 @@ class ProjectCreate(BaseModel):
     name: str = Field(min_length=1)
 
 
+class ProjectAttach(BaseModel):
+    name: str = Field(min_length=1)
+    folder_path: str = Field(min_length=1)
+
+
 class ChatMessage(BaseModel):
     message: str = Field(min_length=1)
 
@@ -37,6 +42,7 @@ async def list_projects():
     projects = store.list()
     return {"projects": [
         {"id": p.id, "name": p.name, "created_at": p.created_at,
+         "attached": p.attached,
          "files_count": len(store.list_files(p))}
         for p in projects
     ]}
@@ -45,7 +51,18 @@ async def list_projects():
 @router.post("/projects", status_code=201)
 async def create_project(req: ProjectCreate):
     p = store.create(req.name)
-    return {"id": p.id, "name": p.name, "created_at": p.created_at}
+    return {"id": p.id, "name": p.name, "created_at": p.created_at,
+            "attached": False}
+
+
+@router.post("/projects/attach", status_code=201)
+async def attach_project(req: ProjectAttach):
+    """Collega un progetto a una cartella ESISTENTE dell'utente (in-place)."""
+    proj, err = store.attach(req.name, req.folder_path)
+    if err:
+        raise HTTPException(400, err)
+    return {"id": proj.id, "name": proj.name, "created_at": proj.created_at,
+            "attached": True, "source_path": proj.source_path}
 
 
 @router.get("/projects/{pid}")
@@ -54,6 +71,7 @@ async def get_project(pid: str):
     if not p:
         raise HTTPException(404, "progetto non trovato")
     return {"id": p.id, "name": p.name, "created_at": p.created_at,
+            "attached": p.attached, "source_path": p.source_path,
             "files": store.list_files(p),
             "runs": store.list_runs(p)}
 
