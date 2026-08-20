@@ -10,16 +10,18 @@ programmazione pura e ottimizzazione di codice/algoritmi, con barra esterna misu
 |---|------|-------|
 | 0 | Setup repo + venv | ✅ commit e6de533 |
 | 1 | engine/state.py + tier detection | ✅ commit 2e34d9f |
-| 2 | result_parser + quality_gate + security_shield | 🔄 in parallelo |
-| 3 | llm/client.py (retry/backoff + quota) | 🔄 in parallelo |
-| 4 | sandbox/runner.py | 🔄 in parallelo |
-| 5 | bar (pytest_bar + perf_bar) | 🔄 in parallelo |
-| 6 | engine/decompose.py + scatter.py | ⏳ dipende da 2-5 |
-| 7 | engine/gauntlet.py + budget.py | ⏳ dipende da 6 |
-| 8 | api/main.py + routes.py | ⏳ dipende da 7 |
-| 9 | web/ SPA Alpine.js dark | ⏳ dipende da 8 |
-| 10 | Integrazione E2E su 3 problemi reali | ⏳ |
-| 11 | Config finale + README | ⏳ |
+| 2 | result_parser + quality_gate + security_shield | ✅ commit 276c527 |
+| 3 | llm/client.py (retry/backoff + quota) | ✅ commit d58ee76 |
+| 4 | sandbox/runner.py | ✅ commit cd3455c |
+| 5 | bar (pytest_bar + perf_bar) | ✅ commit 41b7dca |
+| 6 | engine/decompose.py + scatter.py | ✅ commit ca597a2 |
+| 7 | engine/gauntlet.py + budget.py | ✅ commit 267db3e |
+| 8 | api/main.py + routes.py | ✅ commit 65d1f3d |
+| 9 | web/ SPA Alpine.js dark | ✅ commit 6f078e8 + e063f5e |
+| 10 | E2E su 3 problemi reali | ✅ commit a5fed36 (3/3 WIN, token reali) |
+| 11 | Config finale + README | ✅ commit e05d336 |
+
+**Totale: 13 commit, 41 test, pushato su github.com/ffazecaldy/optimize-engine (main).**
 
 ## Dipendenze
 0 → 1 → 2 → (3,4,5 paralleli) → 6 → 7 → 8 → 9 → 10 → 11
