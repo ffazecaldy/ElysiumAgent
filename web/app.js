@@ -1,9 +1,8 @@
-/* Optimize Engine — SPA Alpine.js: stato, polling, progress live. */
+/* Elysium Agent — SPA Alpine.js: state, progetti, SSE streaming, run. */
 
-const API = "";
+const API = "/api";
 
 function smart(n) {
-  /* numeri smart format: 1500 -> 1.5k, 1234567 -> 1.2M */
   if (n === null || n === undefined) return "0";
   const abs = Math.abs(n);
   if (abs >= 1e6) return (n / 1e6).toFixed(1).replace(".", ",") + "M";
@@ -11,164 +10,208 @@ function smart(n) {
   return String(n);
 }
 
+function pct(x) {
+  if (x === null || x === undefined) return "—";
+  return Math.round(x * 100) + "%";
+}
+
+function esc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function mdToHtml(md) {
+  /* mini renderer markdown: code, pre, bold, italic, liste */
+  md = esc(md || "");
+  md = md.replace(/```(?:python|py|json|yaml)?\n([\s\S]*?)```/g, (m, code) => `<pre>${code}</pre>`);
+  md = md.replace(/`([^`]+)`/g, "<code>$1</code>");
+  md = md.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  md = md.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  md = md.replace(/^##?\s+(.+)$/gm, "<strong>$1</strong>");
+  md = md.replace(/^- (.+)$/gm, "• $1<br>");
+  md = md.replace(/\n/g, "<br>");
+  return md;
+}
+
 function app() {
   return {
-    view: "new",
+    view: "chat",
+    connected: false,
+    projects: [],
+    current: null,
+    messages: [],
+    draft: "",
     busy: false,
+    loopActive: false,
+    loopTier: null,
     error: null,
-    history: [],
-    historyError: null,
-    preflight: null,
-    current: { status: "", max_rounds: 3, events: [] },
-    form: { goal: "", bar: "pytest", max_rounds: 3 },
-    _timer: null,
+    loadingProjects: true,
     _poll: null,
 
-    smart,
+    smart, pct,
 
     init() {
-      this._loadHistory();
+      this.loadProjects();
+      this.pollHealth();
+      setInterval(() => this.pollHealth(), 8000);
     },
 
-    statusClass() {
-      return this.current.status || "";
-    },
-    statusClassShort(s) {
-      return (s || "").replace(/-/g, "_");
-    },
-
-    /* ── creazione ─────────────────────────────────────────── */
-    async createRun() {
-      if (!this.form.goal.trim()) { this.error = "Inserisci un obiettivo."; return; }
-      this.busy = true; this.error = null; this.preflight = null;
+    async pollHealth() {
       try {
-        const r = await fetch(API + "/runs", {
+        const r = await fetch(API + "/projects");
+        this.connected = r.ok;
+      } catch (e) { this.connected = false; }
+    },
+
+    async loadProjects() {
+      this.loadingProjects = true;
+      try {
+        const r = await fetch(API + "/projects");
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || "errore");
+        this.projects = d.projects || [];
+        // auto-seleziona l'ultimo se non c'è selezione
+        if (!this.current && this.projects.length) {
+          await this.switchProject(this.projects[0].id);
+        }
+      } catch (e) {
+        this.error = e.message;
+      } finally {
+        this.loadingProjects = false;
+      }
+    },
+
+    async newProject() {
+      const name = prompt("Nome del progetto:");
+      if (!name || !name.trim()) return;
+      try {
+        const r = await fetch(API + "/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(this.form),
+          body: JSON.stringify({ name: name.trim() }),
         });
-        const body = await r.json();
-        if (!r.ok) throw new Error(body.detail || "Errore creazione run");
-        this.preflight = body;
-        this.saveLocal(body);
-      } catch (e) {
-        this.error = e.message;
-      } finally {
-        this.busy = false;
-      }
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || "errore");
+        this.projects.unshift({ id: d.id, name: d.name, files_count: 0 });
+        await this.switchProject(d.id);
+      } catch (e) { this.error = e.message; }
     },
 
-    /* ── pre-flight / confirm / continue / stop ────────────── */
-    async confirmRun() {
-      this.busy = true; this.error = null;
-      const id = this.preflight.id;
+    async switchProject(id) {
       try {
-        const r = await fetch(API + `/runs/${id}/confirm`, { method: "POST" });
-        const body = await r.json();
-        if (!r.ok) throw new Error(body.detail || "Errore conferma");
-        await this.openRun(id);
-      } catch (e) {
-        this.error = e.message;
-      } finally {
-        this.busy = false;
-      }
-    },
-
-    async continueRun() {
-      this.busy = true;
-      try {
-        const r = await fetch(API + `/runs/${this.current.id}/continue`, { method: "POST" });
-        const body = await r.json();
-        if (!r.ok) throw new Error(body.detail || "Errore continue");
-        await this.openRun(this.current.id);
-      } catch (e) {
-        this.error = e.message;
-      } finally {
-        this.busy = false;
-      }
-    },
-
-    async stopRun() {
-      this.busy = true;
-      try {
-        const r = await fetch(API + `/runs/${this.current.id}/stop`, { method: "POST" });
-        const body = await r.json();
-        if (!r.ok) throw new Error(body.detail || "Errore stop");
-        await this.openRun(this.current.id);
-      } catch (e) {
-        this.error = e.message;
-      } finally {
-        this.busy = false;
-      }
-    },
-
-    /* ── polling ───────────────────────────────────────────── */
-    async openRun(id) {
-      this.clearPoll();
-      this.view = "run";
-      await this._fetchRun(id);
-      // polling GET /runs/{id}/events ogni 2s
-      this._poll = setInterval(async () => {
-        if (this.view !== "run") return;
-        await this._fetchRun(id);
-        const st = this.current.status;
-        if (["completed", "stopped", "quota_exhausted", "failed"].includes(st)) {
-          this.clearPoll();
-          this._loadHistory();
-        }
-      }, 2000);
-    },
-
-    async _fetchRun(id) {
-      try {
-        const r = await fetch(API + `/runs/${id}`);
-        const body = await r.json();
-        if (!r.ok) throw new Error(body.detail || "Errore");
-        this.current = body;
+        const r = await fetch(API + "/projects/" + id);
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || "errore");
+        this.current = d;
+        const c = await (await fetch(API + `/projects/${id}/chat`)).json();
+        this.messages = c.messages || [];
         this.error = null;
+        this.view = "chat";
+        this.$nextTick(() => this.scrollBottom());
+      } catch (e) { this.error = e.message; }
+    },
+
+    scrollBottom() {
+      const el = this.$refs.messages;
+      if (el) el.scrollTop = el.scrollHeight;
+    },
+
+    renderMd(m) { return mdToHtml(m); },
+
+    /* ── invio + SSE ─────────────────────────────────────── */
+    async send() {
+      const text = this.draft.trim();
+      if (!text || this.busy) return;
+      this.draft = "";
+      this.error = null;
+      this.messages.push({ role: "user", content: text });
+      this.busy = true;
+      this.loopActive = false;
+      this.scrollBottom();
+
+      try {
+        const res = await fetch(API + `/projects/${this.current.id}/chat`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Accept": "text/event-stream" },
+          body: JSON.stringify({ message: text }),
+        });
+        if (!res.ok || !res.body) {
+          const d = await res.json().catch(() => ({}));
+          throw new Error(d.detail || "errore " + res.status);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let assistantText = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop();
+          for (const part of parts) {
+            const line = part.split("\n").find((l) => l.startsWith("data:"));
+            if (!line) continue;
+            try {
+              const ev = JSON.parse(line.slice(5).trim());
+              this.handleEvent(ev);
+              if (ev.type === "chunk") assistantText += ev.text;
+            } catch (e) { /* salta eventi malformati */ }
+          }
+        }
+        if (assistantText) {
+          // risposta già salvata dal server; aggiorna l'ultimo assistant se presente
+          const last = this.messages[this.messages.length - 1];
+          if (last && last.role === "assistant") last.content = assistantText;
+        }
       } catch (e) {
         this.error = e.message;
+      } finally {
+        this.busy = false;
+        this.loopActive = false;
+        // ricarica chat (report loop salvati dal server) + file
+        const c = await (await fetch(API + `/projects/${this.current.id}/chat`)).json();
+        this.messages = c.messages || [];
+        this.refreshProject();
+        this.scrollBottom();
       }
     },
 
-    clearPoll() {
-      if (this._poll) { clearInterval(this._poll); this._poll = null; }
-    },
-
-    back() {
-      this.clearPoll();
-      this.view = "new";
-      this.current = { status: "", max_rounds: 3, events: [] };
-      this.preflight = null;
-      this.error = null;
-      this._loadHistory();
-    },
-
-    /* ── cronologia (localStorage) ─────────────────────────── */
-    saveLocal(body) {
-      try {
-        const k = "optimize-engine-runs";
-        const arr = JSON.parse(localStorage.getItem(k) || "[]");
-        arr.push({ id: body.id, goal: this.form.goal, created_at: Date.now() / 1000 });
-        localStorage.setItem(k, JSON.stringify(arr.slice(-20)));
-      } catch (e) { /* storage non disponibile */ }
-    },
-
-    _loadHistory() {
-      try {
-        const k = "optimize-engine-runs";
-        this.history = JSON.parse(localStorage.getItem(k) || "[]");
-      } catch (e) {
-        this.history = [];
+    handleEvent(ev) {
+      switch (ev.type) {
+        case "loop":
+          this.loopActive = true;
+          this.loopTier = ev.tier;
+          break;
+        case "chunk":
+          break; // gestito dal buffer
+        case "report":
+          this.loopActive = false;
+          break;
+        case "error":
+          this.error = ev.detail;
+          this.loopActive = false;
+          break;
+        case "done":
+          this.loopActive = false;
+          break;
       }
-      // prova a ricaricare lo stato server per i run recenti
-      fetch(API + "/runs").then((r) => r.json()).then((d) => {
-        const servers = {};
-        (d.runs || []).forEach((run) => { servers[run.id] = run; });
-        this.history = this.history.map((h) =>
-          servers[h.id] ? { ...h, status: servers[h.id].status } : h
-        ).filter((h) => h.goal);
-      }).catch(() => {});
+    },
+
+    async refreshProject() {
+      if (!this.current) return;
+      try {
+        const r = await fetch(API + "/projects/" + this.current.id);
+        const d = await r.json();
+        if (r.ok) { this.current = d; this.connected = true; }
+        await this.loadProjects();
+      } catch (e) { /* silenzioso */ }
+    },
+
+    async openRuns() {
+      if (this.current) await this.refreshProject();
+      this.view = "runs";
     },
   };
 }
