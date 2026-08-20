@@ -3,7 +3,7 @@
 Harness multi-agente: una **chat** per progetto + **loop Elysium v0.15** (decompose → scatter → quality gate → retry)
 che coordina agenti LLM subalterni su goal di sviluppo software, scrivendo i file direttamente nel workspace del progetto.
 
-È un tool locale single-user: FastAPI in back-end, **SPA Alpine.js** (dark futurista) in front-end, motore comportamentale
+È un tool locale single-user: FastAPI in back-end, **SPA Alpine.js** (stile clears.ai: light + accent lilla `#bf8dff`, font Figtree) in front-end, motore comportamentale
 riusato da `engine/` (port del nucleo di **Elysium Swarmloop v0.15**, `SKILL.md` = spec, già verificato dai 251 check di `e2e_test.py`).
 
 - Provider LLM: **opencode-go** (OpenAI-compatible) → `https://opencode.ai/zen/go/v1`
@@ -207,7 +207,7 @@ ElysiumAgent/
 │   └── projects.py    #   ProjectStore: workspace su disco (files/, chat.json, runs/)
 ├── api/               # FastAPI: main.py (app+CORS+static) · routes.py (REST+SSE)
 │                      #   client_factory.py (LLM da config) · fakes.py (test)
-├── web/               # SPA Alpine.js dark futurist: index.html · style.css · app.js
+├── web/               # SPA Alpine.js stile clears.ai (light + accent lilla #bf8dff, Figtree): index.html · style.css · app.js
 ├── projects/          # workspace persistenti dei progetti (gitignored)
 ├── tests/             # suite pytest (76 test)
 ├── scripts/           # smoke_harness.py (FakeLLM) · e2e_real.py (3 problemi reali)
