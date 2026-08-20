@@ -460,5 +460,26 @@ function app() {
           break;
       }
     },
+
+    /* ── alias/riempitivi compat per eventuale refactor di index.html ──
+       La UI parallela può introdurre nomi alternativi per gli stessi
+       concetti (files, fileOpen, loadFiles, closeFile, openRunDetail,
+       closeRunDetail, newProject). Li esponiamo come alias sicuri:
+       nessuna rottura del DOM attuale, nulla viene rimosso. */
+    get files() { return this.current ? this.current.files : []; },
+
+    get fileOpen() { return this.viewer.open; },
+
+    loadFiles() {
+      // alias di refreshProject: ricarica i file del progetto corrente
+      return this.refreshProject();
+    },
+
+    closeFile() { this.closeViewer(); },
+
+    openRunDetail(run) { return this.expandRun(run); },
+    closeRunDetail() { this.expandedRun = null; this.runDetail = null; },
+
+    newProject() { this.openNewProject(); },
   };
 }
