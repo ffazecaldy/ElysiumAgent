@@ -4,3 +4,7 @@ __pycache__/
 .sandbox/
 results/
 .pytest_cache/
+projects/
+*.log
+node_modules/
+.env
