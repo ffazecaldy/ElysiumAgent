@@ -79,11 +79,10 @@ async def chat(pid: str, req: ChatMessage):
     p = store.get(pid)
     if not p:
         raise HTTPException(404, "progetto non trovato")
-    llm = get_llm()
-    agent = ChatAgent(llm=llm, project=p, store=store)
-
     async def gen():
         try:
+            llm = get_llm()
+            agent = ChatAgent(llm=llm, project=p, store=store)
             async for ev in agent.respond_stream(req.message):
                 yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
         except Exception as exc:  # noqa: BLE001
