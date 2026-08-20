@@ -21,7 +21,10 @@ programmazione pura e ottimizzazione di codice/algoritmi, con barra esterna misu
 | 10 | E2E su 3 problemi reali | ✅ commit a5fed36 (3/3 WIN, token reali) |
 | 11 | Config finale + README | ✅ commit e05d336 |
 
-**Totale: 13 commit, 41 test, pushato su github.com/ffazecaldy/optimize-engine (main).**
+**Totale: 13 commit, 41 test, pushato su github.com/ffazecaldy/ElysiumAgent (main) + backup optimize-engine.**
+
+> 📦 Il progetto vive in `C:\Users\Admin\OneDrive - Florian Elmazi\Documenti\ProgettiAtigravity\HERMES\ElysiumAgent`
+> (spostato da ~/optimize-engine per allineare sessione/codice/repo). Remote: origin=ElysiumAgent, backup=optimize-engine.
 
 ## Dipendenze
 0 → 1 → 2 → (3,4,5 paralleli) → 6 → 7 → 8 → 9 → 10 → 11
