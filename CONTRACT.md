@@ -56,6 +56,14 @@ Header: `Accept: text/event-stream`, `Content-Type: application/json`.
 - stato loop: pill pulsanti colorate per fase (decompose/scatter/gate/done)
 - EMPTY state (zero progetti): messaggio + CTA. LOADING spinner. ERROR banner. TUTTI presenti.
 
+## Note UI (web/index.html + app.js + style.css)
+
+- **Ordine script vincolante:** Alpine 3.16 (CDN) parte su `queueMicrotask` appena eseguito, senza attendere DOMContentLoaded. `app.js` DEVE essere dichiarato PRIMA del CDN Alpine (entrambi `defer`) altrimenti `app()` non esiste al momento dell'init → "app is not defined".
+- **Niente interpolazione `{{ }}`:** Alpine 3.16 non la processa più. Usare solo `x-text` / `x-html`.
+- Dialog "nuovo progetto" e viewer file: `role=dialog`, focus trap (Tab ciclato via `trapFocus`), chiusura Esc, ripristino focus.
+- Persistenza: vista (`elysium.view`) e ultimo progetto (`elysium.project`) in localStorage, ripristinati all'avvio.
+- Design: token in `:root`, unica ombra `--glow`, animazioni sottili, `prefers-reduced-motion` rispettato, focus visibile, breakpoint 900px/600px.
+
 ## Test
 - `tests/test_projects.py` — CRUD progetti, path traversal bloccato
 - `tests/test_chat.py` — wants_loop, build_messages, streaming fake

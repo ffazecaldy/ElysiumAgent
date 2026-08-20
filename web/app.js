@@ -4,7 +4,11 @@
    NESSUNA doppia append: il server salva la conversazione in chat.json;
    il client mostra lo stream in `streamText` (variabile separata, non
    dentro `messages`) e alla fine sincronizza `messages` sostituendo
-   l'array dall'archivio. Nessun messaggio viene ricopiato a mano. */
+   l'array dall'archivio. Nessun messaggio viene ricopiato a mano.
+
+   Persistenza: vista (chat/run) e ultimo progetto in localStorage,
+   ripristinati all'avvio. Il dialog "nuovo progetto" e il viewer file
+   hanno focus trap (Tab ciclato) e chiusura con Esc. */
 
 const API = "/api";
 
@@ -33,7 +37,9 @@ function fmtDate(ts) {
   if (!ts) return "—";
   const d = new Date(ts * 1000);
   const pad = (x) => String(x).padStart(2, "0");
-  const giorno = d.toLocaleDateString("it-IT", { day: "2-digit", month: "short" });
+  const opts = { day: "2-digit", month: "short" };
+  if (d.getFullYear() !== new Date().getFullYear()) opts.year = "numeric";
+  const giorno = d.toLocaleDateString("it-IT", opts);
   return giorno + " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
 }
 
@@ -67,6 +73,14 @@ function runPill(r) {
   return { label: "fallito", cls: "failed" };
 }
 
+/* localStorage sicuro (può lanciare in contesti ristretti) */
+function saveLS(k, v) {
+  try { localStorage.setItem(k, v); } catch (e) { /* silenzioso */ }
+}
+function loadLS(k) {
+  try { return localStorage.getItem(k); } catch (e) { return null; }
+}
+
 function esc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
@@ -97,9 +111,15 @@ function app() {
     loopActive: false,
     loopTier: null,
     streamText: "",          // testo stream in diretta (non in messages)
+    liveReport: null,        // report del loop mostrato appena concluso
     error: null,
     loadingProjects: true,
     sidebarOpen: false,
+
+    /* dialog nuovo progetto */
+    newProjectOpen: false,
+    newProjectName: "",
+    _modalFocus: null,
 
     /* file viewer (sola lettura) */
     viewer: { open: false, path: "", content: "", bytes: 0,
@@ -112,10 +132,16 @@ function app() {
     expandedRun: null,
     runDetail: null,
 
+    /* ripristino da localStorage (consumato al primo switch) */
+    _pendingRestoreView: null,
+    _restoreProject: null,
+
     smart, pct, fmtBytes, fmtDate, fmtDur, fileExt,
     statusLabel, statusClass, runPill,
 
     init() {
+      this._pendingRestoreView = loadLS("elysium.view") === "runs" ? "runs" : null;
+      this._restoreProject = loadLS("elysium.project");
       this.loadProjects();
       this.pollHealth();
       setInterval(() => this.pollHealth(), 8000);
@@ -136,7 +162,8 @@ function app() {
         if (!r.ok) throw new Error(d.detail || "errore");
         this.projects = d.projects || [];
         if (!this.current && this.projects.length) {
-          await this.switchProject(this.projects[0].id);
+          const target = this.projects.find((p) => p.id === this._restoreProject) || this.projects[0];
+          await this.switchProject(target.id);
         }
       } catch (e) {
         this.error = e.message;
@@ -145,20 +172,61 @@ function app() {
       }
     },
 
-    async newProject() {
-      const name = prompt("Nome del progetto:");
-      if (!name || !name.trim()) return;
+    /* ── dialog nuovo progetto (focus trap + Esc) ─────────────── */
+    openNewProject() {
+      this._modalFocus = document.activeElement;
+      this.newProjectOpen = true;
+      this.newProjectName = "";
+      this.sidebarOpen = false;
+      this.$nextTick(() => {
+        const el = this.$refs.npInput;
+        if (el && el.focus) el.focus();
+      });
+    },
+
+    cancelNewProject() {
+      this.newProjectOpen = false;
+      this.newProjectName = "";
+      this.$nextTick(() => {
+        const prev = this._modalFocus;
+        if (prev && prev.isConnected && prev.focus) prev.focus();
+      });
+    },
+
+    async confirmNewProject() {
+      const name = this.newProjectName.trim();
+      if (!name) return;
+      this.newProjectOpen = false;
+      this.newProjectName = "";
       try {
         const r = await fetch(API + "/projects", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: name.trim() }),
+          body: JSON.stringify({ name }),
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || "errore");
         this.projects.unshift({ id: d.id, name: d.name, files_count: 0 });
         await this.switchProject(d.id);
       } catch (e) { this.error = e.message; }
+    },
+
+    /* focus trap generico: il Tab cicla dentro il pannello indicato */
+    trapFocus(e, refName) {
+      const el = this.$refs[refName];
+      if (!el) return;
+      const focusables = el.querySelectorAll(
+        'button:not(:disabled), [href], input:not(:disabled), select, textarea, [tabindex]:not([tabindex="-1"])');
+      if (!focusables.length) { e.preventDefault(); return; }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      if (e.shiftKey && (document.activeElement === first || document.activeElement === el)) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     },
 
     async switchProject(id) {
@@ -170,12 +238,20 @@ function app() {
         this.runs = d.runs || [];
         this.expandedRun = null;
         this.runDetail = null;
+        this.liveReport = null;
         this.closeViewer(true); // senza ripristino focus
+        saveLS("elysium.project", id);
         const c = await (await fetch(API + `/projects/${id}/chat`)).json();
         this.messages = this.keyMessages(c.messages || []);
         this.error = null;
         this.view = "chat";
+        saveLS("elysium.view", "chat");
         this.sidebarOpen = false;
+        if (this._pendingRestoreView === "runs") {
+          this._pendingRestoreView = null;
+          await this.openRuns();
+          return;
+        }
         this.$nextTick(() => this.scrollBottom());
       } catch (e) { this.error = e.message; }
     },
@@ -202,6 +278,7 @@ function app() {
     /* ── navigazione ─────────────────────────────────────────── */
     openChat() {
       this.view = "chat";
+      saveLS("elysium.view", "chat");
       this.sidebarOpen = false;
       this.$nextTick(() => this.scrollBottom());
     },
@@ -209,6 +286,7 @@ function app() {
     async openRuns() {
       this.closeViewer(true);
       this.view = "runs";
+      saveLS("elysium.view", "runs");
       if (this.current) await this.loadRuns();
       else this.runs = [];
     },
@@ -304,6 +382,7 @@ function app() {
       this.error = null;
       this.streamText = "";
       this.loopActive = false;
+      this.liveReport = null;
       // eco utente locale; la chiave coincide con quella del sync,
       // così il nodo viene riusato (niente doppia animazione)
       this.messages.push({ role: "user", content: text, _key: "user:" + this.messages.length });
@@ -368,11 +447,13 @@ function app() {
           this.scrollBottom();
           break;
         case "report":
-          // loop completato: il riepilogo resta visibile finché `done`/sync
+          // loop concluso: riepilogo live finché il sync sostituisce i messaggi
+          this.liveReport = ev.report;
           break;
         case "error":
           this.error = ev.detail;
           this.loopActive = false;
+          this.liveReport = null;
           break;
         case "done":
           this.loopActive = false;
