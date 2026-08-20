@@ -83,9 +83,10 @@ def test_estimate_tokens():
 
 
 def test_budget_tracker_cap():
-    bt = BudgetTracker(round_cap=3, summary_cap_tokens=1000)
-    bt.add_tokens(1000)
-    assert bt.tokens_used == 1000
-    assert bt.hit() is False
-    bt.add_tokens(2500)
-    assert bt.hit() is True
+    bt = BudgetTracker(round_cap=3, summary_cap_tokens=1000, tokens_per_round=6000)
+    bt.add_tokens(6000)
+    assert bt.tokens_used == 6000
+    assert bt.hit() is False  # un round non basta: cap = 3×6000 = 18000
+    bt.add_tokens(6000)
+    bt.add_tokens(6000)
+    assert bt.hit() is True  # due round + uno = cap nominale raggiunto

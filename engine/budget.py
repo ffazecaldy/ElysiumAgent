@@ -14,9 +14,12 @@ def estimate_tokens(subagents: int, rounds: int, summary_cap_tokens: int) -> int
 class BudgetTracker:
     """Traccia i token consumati e segnala quando si supera il cap."""
 
-    def __init__(self, round_cap: int = 3, summary_cap_tokens: int = 1000):
+    def __init__(self, round_cap: int = 3, summary_cap_tokens: int = 1000,
+                 tokens_per_round: int = 6000):
         self.round_cap = round_cap
         self.summary_cap_tokens = summary_cap_tokens
+        # costo nominale massimo per round = builder(4000 max) + critic(2000 max)
+        self.tokens_per_round = tokens_per_round
         self.tokens_used = 0
 
     def add_tokens(self, n: int) -> None:
@@ -24,11 +27,11 @@ class BudgetTracker:
 
     @property
     def estimate(self) -> int:
-        """Stima pre-flight del costo totale (subagents × rounds × cap)."""
-        return estimate_tokens(1, self.round_cap, self.summary_cap_tokens)
+        """Cap totale del run = round × costo massimo nominale per round."""
+        return int(self.round_cap) * int(self.tokens_per_round)
 
     def hit(self) -> bool:
-        """True se i token usati superano la stima del cap."""
+        """True se i token usati superano il cap nominale del run."""
         return self.tokens_used > 0 and self.tokens_used >= self.estimate
 
     def remaining(self) -> int:

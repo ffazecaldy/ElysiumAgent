@@ -34,6 +34,10 @@ Pezzo corrente da costruire/ottimizzare: {piece}
 
 Scrivi il CODICE COMPLETO nel file {artifact_path}. Nessuna architettura spiegata:
 solo codice eseguibile, pronto. La barra è l'unico giudice.
+Se la barra è PytestBar scrivi OBBLIGATORIAMENTE anche i test: rispondi con
+DUE blocchi di codice separati — blocco 1 = il programma ({artifact_path}),
+blocco 2 = il test file ({test_path}) con test di correttezza E performance.
+Senza test la barra fallisce e il round viene bocciato.
 
 Rispondi con il formato RESULT:
 ## RESULT
@@ -71,6 +75,13 @@ def _extract_code(content: str) -> str:
     return m.group(1).strip() if m else content.strip()
 
 
+def _extract_blocks(content: str) -> list[str]:
+    """Estrae TUTTI i blocchi markdown ```...``` nell'ordine di comparsa."""
+    blocks = re.findall(r"```(?:python|py)?\s*(.*?)\s*```", content, re.DOTALL)
+    blocks = [b.strip() for b in blocks if b.strip()]
+    return blocks or ([content.strip()] if content.strip() else [])
+
+
 class Gauntlet:
     def __init__(
         self,
@@ -80,6 +91,7 @@ class Gauntlet:
         bar_desc: str = "barra di sistema",
         status_store: dict | None = None,
         artifact_name: str = "solution.py",
+        test_name: str = "test_solution.py",
         workspace_root: str | None = None,
     ):
         self._llm = llm
@@ -88,6 +100,7 @@ class Gauntlet:
         self.bar_desc = bar_desc
         self.status_store = status_store if status_store is not None else {}
         self.artifact_name = artifact_name
+        self.test_name = test_name
         self.workspace_root = workspace_root or "."
 
     # ── status store ────────────────────────────────────────────────────────
@@ -150,13 +163,20 @@ class Gauntlet:
             round_n=round_n, max_rounds=self.max_rounds, goal=goal,
             bar_desc=self.bar_desc, piece=self._current_piece(goal, round_n),
             artifact_path=artifact_path,
+            test_path=os.path.join(workspace, self.test_name),
         )
         resp = await self._llm.complete(
             [{"role": "user", "content": build_prompt}], max_tokens=4000)
         tokens_build = self._tokens_from(resp)
-        code = _extract_code(resp["choices"][0]["message"]["content"])
+        blocks = _extract_blocks(resp["choices"][0]["message"]["content"])
         with open(artifact_path, "w", encoding="utf-8") as f:
-            f.write(code)
+            f.write(blocks[0])
+        # PytestBar: il secondo blocco (se presente) va nel test file.
+        # Se il modello non lo fornisce, la barra fallisce -> critic chiede il fix.
+        if len(blocks) >= 2:
+            test_path = os.path.join(workspace, self.test_name)
+            with open(test_path, "w", encoding="utf-8") as f:
+                f.write("\n".join(blocks[1:]))
 
         # BAR (l'unico giudice) — eseguita in thread per non bloccare l'event loop
         bar_result = await asyncio.to_thread(self._bar.evaluate, workspace)

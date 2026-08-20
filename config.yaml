@@ -3,7 +3,7 @@
 llm:
   provider: opencode-go
   base_url: "https://opencode.ai/zen/go/v1"
-  model: deepseek-v4-pro
+  model: deepseek-v4-flash
   api_key_env: OPTIMIZE_ENGINE_API_KEY   # valorizzata con OPENCODE_API_KEY
   max_retries: 3
   timeout_s: 300
