@@ -1,0 +1,22 @@
+# optimize-engine — configurazione
+# Provider LLM OpenAI-compatible (assunzione A1)
+llm:
+  provider: opencode-go
+  base_url: "https://opencode.ai/zen/go/v1"
+  model: deepseek-v4-pro
+  api_key_env: OPTIMIZE_ENGINE_API_KEY   # valorizzata con OPENCODE_API_KEY
+  max_retries: 3
+  timeout_s: 300
+
+engine:
+  max_concurrent: 10
+  max_rounds: 3
+  quality_threshold: 7.0
+  summary_cap_tokens:
+    tier2: 500
+    tier3: 1000
+    tier4: 2000
+
+sandbox:
+  timeout_s: 60
+  workdir: ".sandbox"
