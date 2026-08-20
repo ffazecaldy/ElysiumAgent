@@ -42,8 +42,7 @@ CSS = _leggi("style.css")
 
 
 def test_figtree_presente():
-    # La fonte leggera Figtree deve essere caricata o referenziata (restyle).
-    assert "figtree" in HTML or "figtree" in CSS, "font Figtree assente (restyle non completato?)"
+    assert 'figtree' in HTML.lower() or 'figtree' in CSS.lower()
 
 
 def test_endpoint_api_usati():
