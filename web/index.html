@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Optimize Engine</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body x-data="app()" x-init="init()">
+  <a href="#main" class="skip-link">Salta al contenuto</a>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">⚡</span>
+      <h1>Optimize Engine</h1>
+      <span class="tag tier" :class="'tier-' + (current.tier || 0)">tier {{ current.tier || '—' }}</span>
+    </div>
+    <nav aria-label="Navigazione principale">
+      <button class="btn ghost" :class="{active: view === 'new'}" @click="view='new'" aria-label="Nuovo run">Nuovo run</button>
+      <button class="btn ghost" :class="{active: view === 'history'}" @click="view='history'" aria-label="Cronologia run">Cronologia</button>
+    </nav>
+  </header>
+
+  <main id="main">
+    <!-- ─── VISTA: creazione run ─────────────────────────────── -->
+    <section x-show="view === 'new'" x-cloak>
+      <form class="card" @submit.prevent="createRun">
+        <label for="goal">Obiettivo di ottimizzazione</label>
+        <textarea id="goal" x-model="form.goal" rows="3" required
+          placeholder="es. refactor del modulo quicksort con test su 8 file"
+          aria-label="Obiettivo di ottimizzazione"></textarea>
+
+        <div class="row">
+          <div>
+            <label for="bar">Barra</label>
+            <select id="bar" x-model="form.bar" aria-label="Tipo di barra">
+              <option value="pytest">PytestBar — test pass</option>
+              <option value="perf">PerfBar — runtime + memoria</option>
+            </select>
+          </div>
+          <div>
+            <label for="rounds">Round max</label>
+            <input id="rounds" type="number" x-model.number="form.max_rounds" min="1" max="10" aria-label="Round massimi">
+          </div>
+        </div>
+
+        <div class="error" x-show="error" x-text="error" role="alert"></div>
+        <button class="btn primary" type="submit" :disabled="busy">
+          <span x-show="!busy">Stima costo &amp; analizza</span>
+          <span x-show="busy">Analisi…</span>
+        </button>
+      </form>
+
+      <!-- ─── PRE-FLIGHT GATE (Phase 0.7a) ───────────────────── -->
+      <section class="card preflight" x-show="preflight" x-cloak aria-live="polite">
+        <h2>Pre-flight — nessun dispatch senza conferma</h2>
+        <div class="grid3">
+          <div class="stat"><span class="stat-label">Token stimati</span><strong x-text="smart(preflight.estimate_tokens) + ' tok'"></strong></div>
+          <div class="stat"><span class="stat-label">Round</span><strong x-text="preflight.max_rounds"></strong></div>
+          <div class="stat"><span class="stat-label">Tier</span><strong x-text="preflight.tier"></strong></div>
+        </div>
+        <p class="note">Stima = 2 agenti (builder+critic) × {{ preflight.max_rounds }} round × cap summary. Nessun costo in €: solo token reali.</p>
+        <div class="row">
+          <button class="btn primary" @click="confirmRun" :disabled="busy">Conferma e avvia</button>
+          <button class="btn ghost" @click="preflight=null">Annulla</button>
+        </div>
+      </section>
+    </section>
+
+    <!-- ─── VISTA: run attivo ───────────────────────────────── -->
+    <section x-show="view === 'run'" x-cloak>
+      <div class="card" aria-live="polite">
+        <div class="run-head">
+          <h2>Run {{ current.id }}</h2>
+          <span class="pill" :class="statusClass">{{ current.status }}</span>
+        </div>
+        <p class="goal" x-text="current.goal"></p>
+
+        <div class="grid3">
+          <div class="stat"><span class="stat-label">Token stimati</span><strong x-text="smart(current.estimate_tokens || 0) + ' tok'"></strong></div>
+          <div class="stat"><span class="stat-label">Token usati</span><strong x-text="smart(current.tokens_used || 0) + ' tok'"></strong></div>
+          <div class="stat"><span class="stat-label">Round</span><strong x-text="(current.last_update?.rounds ?? current.result?.rounds ?? 0) + '/' + current.max_rounds"></strong></div>
+        </div>
+
+        <!-- loading -->
+        <div class="loading" x-show="current.status === 'running'" role="status">
+          <div class="spinner" aria-hidden="true"></div>
+          <span>Round in esecuzione…</span>
+        </div>
+
+        <!-- checkpoint: azione BLOCCANTE -->
+        <div class="checkpoint" x-show="current.status === 'awaiting_approval'" role="region" aria-label="Check-in per round">
+          <h3>Check-in round {{ (current.last_update?.round ?? 0) }}</h3>
+          <p class="note">Costo accumulato: <strong x-text="smart(current.tokens_used || 0) + ' tok'"></strong> (reali). Chiudi il round corrente e prosegui verso la barra.</p>
+          <template x-if="current.last_update && current.last_update.bar_result">
+            <div class="bar-result" :class="current.last_update.bar_result.win ? 'win' : 'loss'">
+              <strong x-text="current.last_update.bar_result.win ? 'WIN — barra battuta' : 'LOSS — barra non battuta'"></strong>
+              <span x-text="current.last_update.bar_result.detail"></span>
+            </div>
+          </template>
+          <template x-if="current.last_update && current.last_update.gap && current.last_update.gap.gap">
+            <p class="note">Gap più grande: <em x-text="current.last_update.gap.gap"></em></p>
+          </template>
+          <div class="row">
+            <button class="btn primary" @click="continueRun" :disabled="busy">Continua</button>
+            <button class="btn danger" @click="stopRun" :disabled="busy">Stop</button>
+          </div>
+        </div>
+
+        <!-- quota esaurita: mai retry automatici -->
+        <div class="quota" x-show="current.status === 'quota_exhausted'" role="alert">
+          <h3>Quota esaurita</h3>
+          <p>La quota rolling 5h è esaurita: <span x-text="current.exception || 'nessun dettaglio'"></span>. Ricarica la quota del provider per riprovare. Nessun retry automatico in corso.</p>
+        </div>
+
+        <!-- errore -->
+        <div class="error" x-show="current.status === 'failed'" role="alert">
+          <h3>Run fallito</h3>
+          <p x-text="current.exception || 'errore sconosciuto'"></p>
+        </div>
+
+        <!-- risultato finale -->
+        <template x-if="current.status === 'completed'">
+          <div class="result-final">
+            <h3 x-text="current.result?.bar_beaten ? '✅ Barra battuta' : (current.result?.fast_path ? '⚡ Fast-path (tier 1): eseguito direttamente' : '❌ Barra non battuta')"></h3>
+            <pre x-text="JSON.stringify(current.result, null, 2)"></pre>
+          </div>
+        </template>
+
+        <!-- evento timeline -->
+        <ol class="timeline" x-show="current.events && current.events.length">
+          <template x-for="(ev, i) in current.events" :key="i">
+            <li x-text="ev.t ? new Date(ev.t*1000).toLocaleTimeString('it-IT') + ' — ' + ev.status : ev.status"></li>
+          </template>
+        </ol>
+        <p class="empty" x-show="(!current.events || current.events.length === 0) && current.status === 'running'" x-cloak>Nessun evento ancora — in attesa del primo round…</p>
+
+        <button class="btn ghost" @click="back">← Torna</button>
+      </div>
+    </section>
+
+    <!-- ─── VISTA: cronologia ────────────────────────────────── -->
+    <section x-show="view === 'history'" x-cloak>
+      <h2>Cronologia run</h2>
+      <div class="error" x-show="historyError" x-text="historyError" role="alert"></div>
+      <p class="empty" x-show="!historyError && history.length === 0" x-cloak>
+        Nessun run ancora — creane uno.
+      </p>
+      <ul class="history">
+        <template x-for="r in history" :key="r.id">
+          <li class="card row-between" @click="openRun(r.id)" role="button" tabindex="0"
+              @keydown.enter="openRun(r.id)" :aria-label="'Apri run ' + r.id">
+            <div>
+              <strong x-text="r.goal"></strong>
+              <span class="muted" x-text="new Date(r.created_at*1000).toLocaleString('it-IT')"></span>
+            </div>
+            <span class="pill" :class="statusClassShort(r.status)" x-text="r.status"></span>
+          </li>
+        </template>
+      </ul>
+    </section>
+  </main>
+
+  <footer>
+    <p>Optimize Engine — loop multi-agente con barra misurabile. Elysium Swarmloop v0.15.0 come spec.</p>
+  </footer>
+</body>
+</html>
