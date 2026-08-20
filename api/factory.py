@@ -29,6 +29,11 @@ def reset_tests() -> None:
     _test_mode = False
 
 
+def _use_fakes() -> bool:
+    """Test mode se attivato programmaticamente O via env (demo/verifica UI)."""
+    return _test_mode or os.environ.get("OPTIMIZE_ENGINE_TEST_MODE") == "1"
+
+
 def estimate_tokens_for(goal: str, max_rounds: int) -> int:
     """Phase 0.7a: stima token = subagents × rounds × summary_cap (mai $ inventati)."""
     tier = detect_tier(goal)
@@ -52,11 +57,14 @@ def build_gauntlet(
     stop_event: asyncio.Event,
 ) -> Gauntlet:
     """Costruisce la Gauntlet completa (LLM + barra) per il run."""
-    if _test_mode:
+    if _use_fakes():
         from api.fakes import FakeBar, FakeLLM  # noqa: PLC0415
+        # demo UI: OPTIMIZE_ENGINE_FAKE_WIN_AT=N -> vince al round N (default: mai)
+        win_at = int(os.environ.get("OPTIMIZE_ENGINE_FAKE_WIN_AT", "0") or "0")
+        bar = FakeBar(lose_for=win_at - 1) if win_at > 0 else FakeBar(always_lose=True)
         return Gauntlet(
             llm=FakeLLM(),
-            bar=FakeBar(always_lose=True),
+            bar=bar,
             max_rounds=max_rounds,
             bar_desc="barra fake (test)",
             status_store=status_store,
