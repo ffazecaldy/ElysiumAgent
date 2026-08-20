@@ -61,6 +61,8 @@ class LLMClient:
         self._retry_backoff_s = retry_backoff_s
         self._max_retry_after_s = max_retry_after_s
         self._transport = _transport
+        self.last_request_tokens = 0
+        self.last_response_tokens = 0
 
     def _client(self) -> httpx.AsyncClient:
         kwargs: dict[str, Any] = {"timeout": self._timeout_s}
@@ -79,6 +81,9 @@ class LLMClient:
             "messages": messages,
             "max_tokens": max_tokens or self._max_tokens_default,
         }
+        # token stimati del payload (per budget quando la risposta non ha usage)
+        self.last_request_tokens = sum(len(str(m.get("content", ""))) // 3 for m in messages)
+        self.last_response_tokens = 0
         attempt = 0
         while True:
             attempt += 1
@@ -113,4 +118,15 @@ class LLMClient:
                 continue
 
             resp.raise_for_status()
-            return resp.json()
+            data = resp.json()
+            usage = data.get("usage") or {}
+            if usage.get("total_tokens"):
+                self.last_response_tokens = usage["total_tokens"]
+                self.last_request_tokens = usage.get("prompt_tokens", self.last_request_tokens)
+            return data
+
+    def last_tokens(self) -> int:
+        """Token dell'ultima chiamata: usage reale se disponibile, altrimenti stima."""
+        if self.last_response_tokens:
+            return self.last_response_tokens
+        return self.last_request_tokens

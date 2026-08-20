@@ -133,6 +133,10 @@ class Gauntlet:
             self._publish(run_id, STATUS_AWAITING_APPROVAL, result)
             approval_event.clear()
             await approval_event.wait()
+            # appena risvegliato, verifica stop prima di un nuovo round
+            if stop_event is not None and stop_event.is_set():
+                report["stopped"] = True
+                break
 
         status = STATUS_STOPPED if report["stopped"] else STATUS_COMPLETED
         self._publish(run_id, status, report)
@@ -149,6 +153,7 @@ class Gauntlet:
         )
         resp = await self._llm.complete(
             [{"role": "user", "content": build_prompt}], max_tokens=4000)
+        tokens_build = self._tokens_from(resp)
         code = _extract_code(resp["choices"][0]["message"]["content"])
         with open(artifact_path, "w", encoding="utf-8") as f:
             f.write(code)
@@ -167,16 +172,35 @@ class Gauntlet:
             )
             resp = await self._llm.complete(
                 [{"role": "user", "content": critic_prompt}], max_tokens=2000)
+            tokens_critic = self._tokens_from(resp)
             critic_text = resp["choices"][0]["message"]["content"]
             gap = _parse_gap(critic_text)
+        else:
+            tokens_critic = 0
 
         return {
             "round": round_n,
             "bar_beaten": bool(bar_result.get("win")),
             "bar_result": bar_result,
             "gap": gap,
-            "tokens_used": 600,  # stima: builder 4000 + critic 2000 max
+            "tokens_used": tokens_build + tokens_critic,
         }
+
+    def _tokens_from(self, resp: dict) -> int:
+        """Token reali della risposta se il client li espone, altrimenti stima
+        dal testo (mai inventare un numero: stima dichiarabile, non $)."""
+        usage = resp.get("usage") or {}
+        if usage.get("total_tokens"):
+            return int(usage["total_tokens"])
+        # es.: llm.client espone last_tokens() sull'ultima complete
+        llm = getattr(self._llm, "last_tokens", None)
+        if callable(llm):
+            try:
+                return int(llm())
+            except TypeError:
+                pass
+        content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return max(1, len(content) // 3)
 
     def _current_piece(self, goal: str, round_n: int) -> str:
         if round_n == 1:
