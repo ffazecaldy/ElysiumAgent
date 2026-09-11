@@ -12,6 +12,10 @@ harness:
   max_retries: 2           # retry per task sotto soglia
   quality_threshold: 7.0
   projects_dir: "projects" # workspace dei progetti (relativa alla root)
+  git_enabled: true        # checkpoint/rollback/commit (v0.16)
+  execution_enabled: true  # esecuzione verifica reale nel workspace (v0.16)
+  execution_timeout_s: 120 # timeout rigoroso per il runner di verifica (v0.16)
+  rollback_on_failure: true # rollback selettivo dei task falliti (v0.16)
 
 server:
   host: "127.0.0.1"

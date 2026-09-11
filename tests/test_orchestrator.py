@@ -92,4 +92,6 @@ async def test_parse_quality_score_sotto_soglia_non_passa(tmp_path):
             return {"choices": [{"message": {"content": "## RESULT\n- task_id: t\n- status: fail\n- quality_score: 3/10\n\n## FILES\n### FILE: a.py\n```python\nX=1\n```"}}]}
 
     rep = await run_harness(LowLLM(), "goal", p, s, max_retries=1)
-    assert any(t["status"] == "fail" for t in rep["tasks"])
+    # v0.16: definitively-failed tasks are selectively rolled back -> status
+    # becomes 'rolled_back' (fail + changes discarded). Both count as failure.
+    assert any(t["status"] in ("fail", "rolled_back") for t in rep["tasks"])

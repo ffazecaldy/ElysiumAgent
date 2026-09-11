@@ -13,6 +13,7 @@ import logging
 from typing import Optional
 
 from engine.state import detect_tier
+from harness.run_state import RunRegistry
 from harness.orchestrator import SYSTEM_PROMPT, run_harness
 from harness.projects import Project, ProjectStore
 
@@ -51,16 +52,22 @@ def build_messages(chat: list[dict], system: str = SYSTEM_PROMPT,
     return out
 
 
+_run_registry = RunRegistry()
+
+
 class ChatAgent:
     """Assistente conversazionale per un progetto."""
 
     def __init__(self, llm, project: Project, store: ProjectStore,
-                 max_concurrent: int = 8, max_retries: int = 2):
+                 max_concurrent: int = 8, max_retries: int = 2,
+                 git_enabled: bool = True, execution_enabled: bool = True):
         self._llm = llm
         self.project = project
         self.store = store
         self.max_concurrent = max_concurrent
         self.max_retries = max_retries
+        self.git_enabled = git_enabled
+        self.execution_enabled = execution_enabled
 
     async def respond_stream(self, user_text: str):
         """Processa un messaggio utente; yield eventi di progresso e risposta.
@@ -77,11 +84,18 @@ class ChatAgent:
             # attiva il loop multi-agente Elysium
             yield {"type": "loop", "goal": user_text, "tier": detect_tier(user_text)}
             try:
+                run_id = uuid.uuid4().hex[:8]
+                cancel_event = _run_registry.register(self.project.pid, run_id).cancel_event
                 report = await run_harness(
                     llm=self._llm, goal=user_text, project=self.project,
                     store=self.store, max_concurrent=self.max_concurrent,
                     max_retries=self.max_retries,
+                    git_enabled=self.git_enabled,
+                    execution_enabled=self.execution_enabled,
+                    cancel_event=cancel_event,
                 )
+                report["run_id"] = run_id
+                _run_registry.forget(self.project.pid, run_id)
                 self.store.append_message(
                     self.project, "assistant",
                     _format_report(report),

@@ -152,3 +152,32 @@ async def get_run(pid: str, run_id: str):
         raise HTTPException(404, "run non trovato")
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
+
+
+# ── v0.16: run control (cancel / status) ──────────────────────
+from harness.run_state import RunRegistry
+
+run_registry = RunRegistry()
+
+
+class RunCancel(BaseModel):
+    run_id: str
+
+
+@router.post("/projects/{pid}/runs/cancel")
+async def cancel_run(pid: str, req: RunCancel):
+    """Cancella una run in corso (cooperative cancellation)."""
+    p = store.get(pid)
+    if not p:
+        raise HTTPException(404, "progetto non trovato")
+    ok = run_registry.cancel(pid, req.run_id)
+    return {"cancelled": ok, "run_id": req.run_id}
+
+
+@router.get("/projects/{pid}/runs/{run_id}/status")
+async def run_status(pid: str, run_id: str):
+    """Stato di controllo della run (running/paused/cancelled/...)."""
+    p = store.get(pid)
+    if not p:
+        raise HTTPException(404, "progetto non trovato")
+    return {"run_id": run_id, "state": run_registry.state(pid, run_id)}

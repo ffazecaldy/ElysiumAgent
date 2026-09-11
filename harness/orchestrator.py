@@ -26,7 +26,9 @@ from engine.quality_gate import apply_penalties
 from engine.result_parser import parse_result
 from engine.state import BAND_KEYWORDS, band_filter, detect_tier, tier_to_threshold
 from engine.security_shield import scan as security_scan
+from harness.git_service import GitService
 from harness.projects import Project, ProjectStore
+from harness.execution import ProjectRunner
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +109,11 @@ class HarnessRun:
 
     def __init__(self, llm, goal: str, project: Project, store: ProjectStore,
                  max_concurrent: int = 8, max_retries: int = 2,
-                 threshold: float = DEFAULT_THRESHOLD, run_id: Optional[str] = None):
+                 threshold: float = DEFAULT_THRESHOLD, run_id: Optional[str] = None,
+                 git_enabled: bool = True, execution_enabled: bool = True,
+                 execution_timeout_s: float = 120.0,
+                 rollback_on_failure: bool = True,
+                 cancel_event: Optional["asyncio.Event"] = None):
         self._llm = llm
         self.goal = goal
         self.project = project
@@ -118,15 +124,37 @@ class HarnessRun:
         self.run_id = run_id or uuid.uuid4().hex[:8]
         self.tier = detect_tier(goal)
         self._written_files: list[dict] = []
+        # ── v0.16: execution / git / run control ──
+        self.git_enabled = git_enabled
+        self.execution_enabled = execution_enabled
+        self.execution_timeout_s = execution_timeout_s
+        self.rollback_on_failure = rollback_on_failure
+        self.cancel_event = cancel_event
+        self._git: Optional[GitService] = None
+        self._pre_run_sha: Optional[str] = None
+        self._events: list[dict] = []
+
+    # ── v0.16 run control ─────────────────────────────────────
+    def _emit(self, etype: str, **data) -> None:
+        """Registra un evento di run (usato anche da SSE via report['events'])."""
+        ev = {"type": etype, "run_id": self.run_id, "ts": time.time(), **data}
+        self._events.append(ev)
+
+    def _cancelled(self) -> bool:
+        return self.cancel_event is not None and self.cancel_event.is_set()
+
+    def _workspace(self) -> str:
+        return self.project.files_dir
 
     async def _complete(self, messages: list[dict], max_tokens: int = 4000) -> str:
         resp = await self._llm.complete(messages, max_tokens=max_tokens)
         return resp["choices"][0]["message"]["content"]
 
     async def run(self) -> dict:
-        """Esegue il loop completo. Ritorna il report (salvato in runs/)."""
+        """Esegue il loop completo v0.16:
+        decompose → scatter → write → execute/verify → retry → commit/rollback → report.
+        """
         started = time.time()
-        tasks = await self._decompose()
         report = {
             "run_id": self.run_id,
             "goal": self.goal,
@@ -138,13 +166,50 @@ class HarnessRun:
             "first_pass_rate": None,
             "avg_quality": None,
             "final_status": "running",
+            # ── v0.16 additions (additive, backward compatible) ──
+            "execution": {"detected": False, "command": [], "success": False,
+                          "returncode": None, "duration": 0.0, "stdout": "",
+                          "stderr": "", "timed_out": False, "skipped": True,
+                          "skip_reason": "not run", "results": []},
+            "git": {"repository_initialized": False, "pre_run_checkpoint": None,
+                    "final_commit": None, "rollback": [],
+                    "rollback_scope": None},
+            "run": {"status": "running", "cancelled": False,
+                    "paused": False, "resumed": False},
+            "events": self._events,
         }
+        self._emit("run_started")
+
+        # ── cancel gate: cancelled PRIMA di iniziare ──
+        if self._cancelled():
+            report["final_status"] = "cancelled"
+            report["run"]["status"] = "cancelled"
+            report["run"]["cancelled"] = True
+            self._emit("run_cancelled")
+            self.store.save_run(self.project, report)
+            return report
+
+        # ── git: ensure repo + checkpoint pre-run ──
+        if self.git_enabled:
+            self._git = GitService(self._workspace())
+            if not self._git.is_repo():
+                self._git.ensure_repo()
+                report["git"]["repository_initialized"] = True
+            self._pre_run_sha = self._git.checkpoint(f"pre-run {self.run_id}")
+            report["git"]["pre_run_checkpoint"] = self._pre_run_sha
+            self._emit("checkpoint", sha=self._pre_run_sha)
+
+        tasks = await self._decompose()
 
         # scatter in parallelo con semaforo
         sem = asyncio.Semaphore(self.max_concurrent)
 
         async def _work(task: dict) -> dict:
             async with sem:
+                if self._cancelled():
+                    return {"task_id": task.get("id"), "status": "cancelled",
+                            "quality_score": 0.0, "files": [], "attempts": 0,
+                            "modified_paths": []}
                 return await self._exec_task(task)
 
         results = await asyncio.gather(*[_work(t) for t in tasks])
@@ -152,8 +217,14 @@ class HarnessRun:
             entry = {"task_id": task.get("id"), "status": res.get("status"),
                      "quality": res.get("quality_score"),
                      "attempts": res.get("attempts"), "gap": res.get("gap"),
-                     "files": res.get("files", [])}
+                     "files": res.get("files", []),
+                     # v0.16 additions
+                     "retry_count": max(0, res.get("attempts", 1) - 1),
+                     "modified_paths": res.get("modified_paths", []),
+                     "verification": res.get("verification"),
+                     }
             report["tasks"].append(entry)
+            self._emit("task_completed", task_id=entry["task_id"], status=entry["status"])
 
         # metriche
         first_try = [t for t in report["tasks"] if t.get("attempts", 0) == 1]
@@ -168,7 +239,64 @@ class HarnessRun:
         report["tokens_estimate"] = sum(
             t.get("attempts", 0) * 900 for t in report["tasks"])  # stima conservativa
         report["files_written"] = self._written_files
-        report["final_status"] = "completed" if n_pass == len(report["tasks"]) else "partial"
+
+        # ── v0.16: execution / verification della run ──
+        ws = self._workspace()
+        if self.execution_enabled and not self._cancelled():
+            self._emit("verification_started")
+            runner = ProjectRunner()
+            ver = runner.run_verification(ws, timeout_s=self.execution_timeout_s, enabled=True)
+            report["execution"] = ver
+            self._emit("verification_result", success=ver["success"], kind=ver["kind"])
+        elif self._cancelled():
+            report["execution"]["skip_reason"] = "run cancelled"
+
+        # ── v0.16: selective rollback / final commit ──
+        failed_tasks = [t for t in report["tasks"] if t.get("status") == "fail"]
+        cancelled = report["run"]["cancelled"]
+
+        if self._git is not None and self._pre_run_sha:
+            if failed_tasks and self.rollback_on_failure:
+                # rollback SELETTIVO: ripristina solo i path dei task falliti
+                for t in failed_tasks:
+                    paths = t.get("modified_paths") or t.get("files") or []
+                    if paths:
+                        n = self._git.rollback_paths(paths, to_commit=self._pre_run_sha)
+                        report["git"]["rollback"].append(
+                            {"scope": "task", "task_id": t["task_id"], "paths": paths, "restored": n}
+                        )
+                    # il task fallito e ripristinato conta come non-passato
+                    t["status"] = "rolled_back"
+                report["git"]["rollback_scope"] = "task"
+                self._emit("rollback", scope="task", tasks=[t["task_id"] for t in failed_tasks])
+                n_pass = sum(1 for t in report["tasks"] if t.get("status") == "pass")
+                report["n_passed"] = n_pass
+
+            if report["execution"].get("success") and not cancelled and not failed_tasks:
+                # verificato → commit finale coerente
+                sha = self._git.commit(f"elysium run {self.run_id}: {self.goal[:60]}")
+                report["git"]["final_commit"] = sha
+                self._emit("run_commit", sha=sha)
+            elif failed_tasks:
+                # stato di verifica fallita definitiva: nessun commit finale
+                report["git"]["final_commit"] = None
+
+        # ── final status (preserva partial/cancelled) ──
+        if cancelled:
+            report["final_status"] = "cancelled"
+            report["run"]["status"] = "cancelled"
+            report["run"]["cancelled"] = True
+            self._emit("run_cancelled")
+        elif n_pass == len(report["tasks"]) and len(report["tasks"]) > 0:
+            report["final_status"] = "completed"
+            report["run"]["status"] = "completed"
+            self._emit("run_completed")
+        elif failed_tasks or any(t.get("status") == "rolled_back" for t in report["tasks"]):
+            report["final_status"] = "partial"
+            report["run"]["status"] = "partial"
+        else:
+            report["final_status"] = "partial"
+            report["run"]["status"] = "partial"
 
         self.store.save_run(self.project, report)
         return report
@@ -195,7 +323,8 @@ class HarnessRun:
         attempts = 0
         last_gap = None
         result: dict = {"task_id": task_id, "status": "fail",
-                        "quality_score": 0.0, "files": [], "attempts": 0}
+                        "quality_score": 0.0, "files": [], "attempts": 0,
+                        "modified_paths": [], "verification": None}
 
         while attempts < self.max_retries + 1:
             attempts += 1
@@ -237,12 +366,33 @@ class HarnessRun:
                 for f in files_out:
                     self.store.write_file(self.project, f["path"], f["content"])
                 self._record_files(files_out)
+                result["modified_paths"] = [f["path"] for f in files_out]
 
+            if result["status"] == "pass":
+                # verifica per-task del risultato (se execution abilitata)
+                if self.execution_enabled:
+                    from harness.execution import ProjectRunner
+                    runner = ProjectRunner()
+                    ver = runner.run_verification(
+                        self._workspace(),
+                        timeout_s=self.execution_timeout_s,
+                        enabled=True,
+                    )
+                    result["verification"] = {"success": ver["success"],
+                                              "kind": ver["kind"],
+                                              "returncode": ver["returncode"]}
+                    if not ver["success"] and attempts <= self.max_retries:
+                        # verification failure → feed error al retry/fix
+                        result["status"] = "fail"
+                        last_gap = f"verification failed: rc={ver['returncode']} stderr={ver['stderr'][:200]}"
+                else:
+                    result["verification"] = None
             if result["status"] == "pass":
                 break
             last_gap = (parsed.get("gaps") or [None])[0] if parsed.get("gaps") else \
                 f"score {final_score:.1f} sotto soglia {self.threshold}"
 
+        result.setdefault("modified_paths", [])
         return result
 
     def _record_files(self, files: list[dict]) -> None:
@@ -252,9 +402,17 @@ class HarnessRun:
 
 async def run_harness(llm, goal: str, project: Project, store: ProjectStore,
                       max_concurrent: int = 8, max_retries: int = 2,
-                      threshold: float = DEFAULT_THRESHOLD) -> dict:
+                      threshold: float = DEFAULT_THRESHOLD,
+                      git_enabled: bool = True, execution_enabled: bool = True,
+                      execution_timeout_s: float = 120.0,
+                      rollback_on_failure: bool = True,
+                      cancel_event: Optional["asyncio.Event"] = None) -> dict:
     """Entry point: esegue il loop e ritorna il report."""
     h = HarnessRun(llm=llm, goal=goal, project=project, store=store,
                    max_concurrent=max_concurrent, max_retries=max_retries,
-                   threshold=threshold)
+                   threshold=threshold, git_enabled=git_enabled,
+                   execution_enabled=execution_enabled,
+                   execution_timeout_s=execution_timeout_s,
+                   rollback_on_failure=rollback_on_failure,
+                   cancel_event=cancel_event)
     return await h.run()

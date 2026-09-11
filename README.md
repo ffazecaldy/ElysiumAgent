@@ -281,3 +281,10 @@ Smoke rapido del nucleo senza rete:
 
 Strumento locale single-user. Nessun dato inviato a servizi non configurati esplicitamente
 (provider LLM `opencode-go` configurato via `config.yaml` + `OPTIMIZE_ENGINE_API_KEY`).
+
+
+## v0.16 — Execution & Verification
+
+From v0.16 the harness runs real verification commands in the project workspace (pytest / npm test / cargo test / go test, auto-detected).
+
+**WARNING: v0.16 does NOT provide a full security sandbox.** The subprocess executes model-produced code with strict timeouts and an executable allowlist, but network access and filesystem access outside the workspace are NOT fully isolated. Run only on trusted projects and never expose the server publicly.
