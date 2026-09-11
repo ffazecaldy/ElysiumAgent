@@ -16,6 +16,7 @@ harness:
   execution_enabled: true  # esecuzione verifica reale nel workspace (v0.16)
   execution_timeout_s: 120 # timeout rigoroso per il runner di verifica (v0.16)
   rollback_on_failure: true # rollback selettivo dei task falliti (v0.16)
+  allow_remote: false       # OPT-IN: push/pull su remoto per progetto (v0.16, default OFF)
 
 server:
   host: "127.0.0.1"

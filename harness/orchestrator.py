@@ -113,7 +113,8 @@ class HarnessRun:
                  git_enabled: bool = True, execution_enabled: bool = True,
                  execution_timeout_s: float = 120.0,
                  rollback_on_failure: bool = True,
-                 cancel_event: Optional["asyncio.Event"] = None):
+                 cancel_event: Optional["asyncio.Event"] = None,
+                 allow_remote: bool = False):
         self._llm = llm
         self.goal = goal
         self.project = project
@@ -130,6 +131,7 @@ class HarnessRun:
         self.execution_timeout_s = execution_timeout_s
         self.rollback_on_failure = rollback_on_failure
         self.cancel_event = cancel_event
+        self.allow_remote = allow_remote
         self._git: Optional[GitService] = None
         self._pre_run_sha: Optional[str] = None
         self._events: list[dict] = []
@@ -191,7 +193,7 @@ class HarnessRun:
 
         # ── git: ensure repo + checkpoint pre-run ──
         if self.git_enabled:
-            self._git = GitService(self._workspace())
+            self._git = GitService(self._workspace(), allow_remote=self.allow_remote)
             if not self._git.is_repo():
                 self._git.ensure_repo()
                 report["git"]["repository_initialized"] = True
@@ -277,6 +279,13 @@ class HarnessRun:
                 sha = self._git.commit(f"elysium run {self.run_id}: {self.goal[:60]}")
                 report["git"]["final_commit"] = sha
                 self._emit("run_commit", sha=sha)
+                # opt-in remoto: push SOLO su branch dedicato elysium/<run_id>
+                if self.allow_remote:
+                    branch = f"elysium/{self.run_id}"
+                    if self._git.create_branch(branch):
+                        pushed = self._git.push(branch)
+                        report["git"]["pushed_branch"] = branch if pushed else None
+                        self._emit("push", branch=branch, ok=pushed)
             elif failed_tasks:
                 # stato di verifica fallita definitiva: nessun commit finale
                 report["git"]["final_commit"] = None
@@ -406,7 +415,8 @@ async def run_harness(llm, goal: str, project: Project, store: ProjectStore,
                       git_enabled: bool = True, execution_enabled: bool = True,
                       execution_timeout_s: float = 120.0,
                       rollback_on_failure: bool = True,
-                      cancel_event: Optional["asyncio.Event"] = None) -> dict:
+                      cancel_event: Optional["asyncio.Event"] = None,
+                      allow_remote: bool = False) -> dict:
     """Entry point: esegue il loop e ritorna il report."""
     h = HarnessRun(llm=llm, goal=goal, project=project, store=store,
                    max_concurrent=max_concurrent, max_retries=max_retries,
@@ -414,5 +424,5 @@ async def run_harness(llm, goal: str, project: Project, store: ProjectStore,
                    execution_enabled=execution_enabled,
                    execution_timeout_s=execution_timeout_s,
                    rollback_on_failure=rollback_on_failure,
-                   cancel_event=cancel_event)
+                   cancel_event=cancel_event, allow_remote=allow_remote)
     return await h.run()

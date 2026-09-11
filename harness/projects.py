@@ -46,6 +46,7 @@ class Project:
     workspace: str | None = None   # dir file; se None → path/workspace (normale)
     attached: bool = False         # True = workspace è una cartella esterna utente
     source_path: str | None = None # path originale della cartella esterna
+    allow_remote: bool = False     # v0.16: opt-in push/pull/fetch per questo progetto
 
     @property
     def files_dir(self) -> str:
@@ -104,7 +105,7 @@ class ProjectStore:
             return None
         return self._from_meta(project_id, meta)
 
-    def create(self, name: str) -> Project:
+    def create(self, name: str, allow_remote: bool = False) -> Project:
         pid = _safe_slug(name)
         base = pid
         n = 2
@@ -116,9 +117,10 @@ class ProjectStore:
         os.makedirs(os.path.join(path, "workspace"), exist_ok=True)
         os.makedirs(os.path.join(path, "runs"), exist_ok=True)
         proj = Project(id=pid, name=name, created_at=time.time(),
-                       path=path, workspace=None, attached=False)
+                       path=path, workspace=None, attached=False,
+                       allow_remote=allow_remote)
         idx[pid] = {"name": name, "created_at": proj.created_at, "path": path,
-                    "attached": False}
+                    "attached": False, "allow_remote": allow_remote}
         self._save_index(idx)
         self._write_chat(proj, [])
         return proj

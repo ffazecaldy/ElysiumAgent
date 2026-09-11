@@ -11,7 +11,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, Field
 
 from api.client_factory import get_llm
 from harness.chat import ChatAgent
@@ -25,6 +25,7 @@ store = ProjectStore()
 
 class ProjectCreate(BaseModel):
     name: str = Field(min_length=1)
+    allow_remote: bool = False  # v0.16 opt-in: abilita push/pull per questo progetto = Field(min_length=1)
 
 
 class ProjectAttach(BaseModel):
@@ -50,9 +51,9 @@ async def list_projects():
 
 @router.post("/projects", status_code=201)
 async def create_project(req: ProjectCreate):
-    p = store.create(req.name)
+    p = store.create(req.name, allow_remote=req.allow_remote)
     return {"id": p.id, "name": p.name, "created_at": p.created_at,
-            "attached": False}
+            "attached": False, "allow_remote": p.allow_remote}
 
 
 @router.post("/projects/attach", status_code=201)

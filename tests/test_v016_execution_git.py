@@ -316,3 +316,54 @@ async def test_cancel_event_antes_run_annulla_subito(tmp_path, git_env):
         max_retries=1, git_enabled=True, execution_enabled=True, cancel_event=ev,
     ).run()
     assert rep["final_status"] == "cancelled"
+
+
+# ──────────────────────────────────────────────────────────────
+# v0.16-A: remote ops opt-in per progetto (push/pull/fetch)
+# ──────────────────────────────────────────────────────────────
+def test_remote_ops_bloccate_di_default(tmp_path):
+    """Senza allow_remote, push/pull/fetch sollevano PermissionError."""
+    import pytest
+    from harness.git_service import GitService
+    ws = str(tmp_path / "ws")
+    os.makedirs(ws)
+    g = GitService(ws)  # allow_remote default False
+    g.ensure_repo()
+    with pytest.raises(PermissionError):
+        g.push("main")
+    with pytest.raises(PermissionError):
+        g.pull("origin")
+    with pytest.raises(PermissionError):
+        g.fetch("origin")
+
+
+def test_remote_ops_consentite_con_allow_remote(tmp_path, git_env):
+    """Con allow_remote=True i metodi non sollevano PermissionError.
+    Il push fallisce per remote assente (non per policy) — exit != 0 va bene."""
+    from harness.git_service import GitService
+    ws = str(tmp_path / "ws")
+    os.makedirs(ws)
+    g = GitService(ws, allow_remote=True)
+    g.ensure_repo()
+    # nessuna PermissionError: il fallimento è di rete/remote (exit code), non policy
+    assert g.push("main") is False  # no remote configured -> git error, not PermissionError
+
+
+def test_create_branch_per_push_dedicato(tmp_path):
+    """create_branch (locale) funziona e serve al push su elysium/<run_id>."""
+    from harness.git_service import GitService
+    ws = str(tmp_path / "ws")
+    os.makedirs(ws)
+    g = GitService(ws)
+    g.ensure_repo()
+    assert g.create_branch("elysium/abc123") is True
+
+
+def test_project_allow_remote_propagato(tmp_path):
+    """ProjectStore.create propaga allow_remote nel Project."""
+    from harness.projects import ProjectStore
+    s = ProjectStore(root=str(tmp_path))
+    p1 = s.create("remoto", allow_remote=True)
+    p2 = s.create("locale")
+    assert p1.allow_remote is True
+    assert p2.allow_remote is False

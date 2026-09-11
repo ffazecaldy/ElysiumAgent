@@ -289,8 +289,9 @@ _low = _sys.modules[__name__]  # self-alias: _low._sanitize_message etc.
 class GitService:
     """Sincrono, stateless sul workspace: ogni metodo prende/usa il path."""
 
-    def __init__(self, workspace: str):
+    def __init__(self, workspace: str, allow_remote: bool = False):
         self.workspace = os.path.abspath(workspace)
+        self._remote_allowed = allow_remote
 
     # ── repo lifecycle ────────────────────────────────────────
 
@@ -414,6 +415,55 @@ class GitService:
         return res1.exit_code == 0 and res2.exit_code == 0
 
     # ── stato ─────────────────────────────────────────────────
+
+    # ── remote ops (opt-in per progetto: allow_remote) ─────────
+
+    def allow_remote(self, allowed: bool) -> None:
+        """Abilita push/pull/fetch SOLO se il caller (progetto) lo consente."""
+        self._remote_allowed = allowed
+
+    def _require_remote(self, *allowed_subcommands: str) -> None:
+        """Remote ops sono opt-in per progetto. Solleva se non abilitate.
+
+        `allowed_subcommands` documenta QUALE operazione è in corso (self-doc):
+        solo push/pull/fetch sono mai invocabili, mai comandi arbitrari.
+        """
+        if not getattr(self, "_remote_allowed", False):
+            raise PermissionError(
+                "remote git ops disabled for this project (allow_remote=False)"
+            )
+        assert all(sc in ("push", "pull", "fetch") for sc in allowed_subcommands)
+
+    def push(self, branch: str, remote: str = "origin",
+             set_upstream: bool = False) -> bool:
+        """Push del branch corrente/indicato. Richiede allow_remote."""
+        self._require_remote("push")
+        argv = ["git", "push", remote, branch]
+        if set_upstream:
+            argv = ["git", "push", "-u", remote, branch]
+        res = run_command_sync(argv, self.workspace, timeout=300)
+        return res.exit_code == 0
+
+    def pull(self, remote: str = "origin", branch: str = "") -> bool:
+        """Pull (ff-only per evitare merge involontari). Richiede allow_remote."""
+        self._require_remote("pull")
+        argv = ["git", "pull", "--ff-only", remote] + ([branch] if branch else [])
+        res = run_command_sync(argv, self.workspace, timeout=300)
+        return res.exit_code == 0
+
+    def fetch(self, remote: str = "origin") -> bool:
+        """Fetch senza merge. Richiede allow_remote."""
+        self._require_remote("fetch")
+        res = run_command_sync(["git", "fetch", remote], self.workspace, timeout=300)
+        return res.exit_code == 0
+
+    def create_branch(self, branch: str, from_commit: Optional[str] = None) -> bool:
+        """Crea e switcha un branch (usato per elysium/<run_id>)."""
+        argv = ["git", "checkout", "-b", branch]
+        if from_commit:
+            argv.append(from_commit)
+        res = run_command_sync(argv, self.workspace, timeout=60)
+        return res.exit_code == 0
 
     def has_changes(self) -> bool:
         res = run_command_sync(
