@@ -41,6 +41,40 @@ export const magenta = colorize("35", "39");
 export const white = colorize("97", "39");
 export const blue = colorize("94", "39");
 
+// ── Fire palette (256-color brand accents — "rosso fuoco") ──
+// flame/amber/ember/fire/dRed go bright→deep; used for brand moments
+// (wordmark, section titles, prompt, pane headers). Semantic status colors
+// (green/yellow/red) stay untouched for pass/warn/fail meaning.
+export const fire = colorize("38;5;196", "39");
+export const ember = colorize("38;5;202", "39");
+export const amber = colorize("38;5;208", "39");
+export const flame = colorize("38;5;214", "39");
+export const dRed = colorize("38;5;88", "39");
+
+/** Fire wordmark rows for "ELYSIUM" (ANSI-shadow style), bright→deep. */
+const FIRE_MARK_ROWS: readonly string[] = [
+  "███████╗██╗  ██╗██╗   ██╗███████╗██╗██╗   ██╗███╗   ███╗",
+  "██╔════╝╚██╗██╔╝╚██╗ ██╔╝██╔════╝██║██║   ██║████╗ ████║",
+  "█████╗   ╚███╔╝  ╚████╔╝ █████╗  ██║██║   ██║██╔████╔██║",
+  "██╔══╝   ██╔██╗   ╚██╔╝  ██╔══╝  ██║██║   ██║██║╚██╔╝██║",
+  "███████╗██╔╝ ██╗   ██║   ███████╗██║╚██████╔╝██║ ╚═╝ ██║",
+  "╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝ ╚═════╝ ╚═╝     ╚═╝",
+];
+const FIRE_MARK_COLORS: readonly Colorize[] = [flame, amber, ember, fire, fire, dRed];
+
+/** Blocky torch emblem for the welcome box left column (no backslashes). */
+const FLAME_ART_ROWS: readonly string[] = [
+  "   ▄█▄",
+  "  ▀███▀",
+  "   ███",
+  "  ▄███▄",
+  " ▄█████▄",
+  "██▀███▀██",
+  "   ███",
+  "  ▄█ █▄",
+];
+const FLAME_ART_COLORS: readonly Colorize[] = [flame, amber, ember, fire, ember, amber, fire, dRed];
+
 /** Typographic status markers — no emoji, greppable, color-independent. */
 export const marks = {
   ok: "[ok]",
@@ -85,11 +119,119 @@ export function kv(label: string, value: string): string {
 }
 
 /**
- * Section header: uppercase label over a rule. The professional way to
- * separate areas without emoji.
+ * Section header: uppercase label over a rule. Brand-colored (amber).
  */
 export function section(title: string): string {
-  return `\n  ${bold(title.toUpperCase())}\n  ${dim("─".repeat(Math.max(24, title.length + 2)))}`;
+  return `\n  ${bold(amber(title.toUpperCase()))}\n  ${dim("─".repeat(Math.max(24, title.length + 2)))}`;
+}
+
+/** Info shown on the welcome screen. */
+export interface WelcomeInfo {
+  version: string;
+  provider: string;
+  model: string;
+  session: string;
+  mode: string;
+  workspace: string;
+  tools: string[];
+  skills: string[];
+}
+
+/**
+ * Full welcome screen (TTY): fire-gradient wordmark + structured box —
+ * torch emblem and model/session on the left, Tools/Skills columns on the
+ * right, count footer. Non-TTY: compact plain block (deterministic pipes).
+ */
+export function welcomeScreen(info: WelcomeInfo): string {
+  const head = [
+    `Elysium Harness v${info.version} · ${info.provider} · ${info.model}`,
+    `session ${info.session}`,
+  ];
+  if (!COLORS_ENABLED) {
+    return [
+      "ELYSIUM",
+      ...head,
+      `tools: ${info.tools.join(" ")} | skills: ${info.skills.join(", ")}`,
+    ].join("\n");
+  }
+  const termW = Math.max(80, process.stdout.columns ?? 100);
+  const inner = Math.min(108, termW) - 4;
+  const leftW = 16;
+  const rightW = inner - leftW - 3;
+
+  // Right column lines.
+  const right: string[] = [];
+  right.push(`${bold(flame("Tools"))}`);
+  right.push(`  ${white(info.tools.join(" · "))}`);
+  right.push("");
+  right.push(`${bold(flame("Skills"))}`);
+  const shown: string[] = [];
+  let used = 0;
+  for (const s of info.skills) {
+    if (used + s.length + 2 > rightW - 2 || shown.length === 6) {
+      break;
+    }
+    shown.push(s);
+    used += s.length + 2;
+  }
+  right.push(
+    `  ${dim(shown.join(", "))}${info.skills.length > shown.length ? dim(` +${info.skills.length - shown.length} more`) : ""}`,
+  );
+  right.push("");
+  right.push(
+    `  ${dim(`${info.tools.length} tools · ${info.skills.length} skills · /help for commands`)}`,
+  );
+
+  // Left column: torch art top, model/session bottom.
+  const leftTop = FLAME_ART_ROWS.map((row, i) => FLAME_ART_COLORS[i]?.(row) ?? row);
+  const leftBottom = [
+    dim(truncatePlain(info.model, leftW - 1)),
+    dim(info.session.slice(0, leftW - 1)),
+  ];
+
+  const rowLines = Math.max(leftTop.length + 2 + leftBottom.length, right.length);
+  const leftAll: string[] = [...leftTop, "", ...leftBottom];
+  const row = (l: string, r: string): string => {
+    const lp = padRight(l, leftW);
+    const rp = padRight(r, rightW);
+    return `${dim("│")}${lp}${dim(" │ ")}${rp}${dim("│")}`;
+  };
+  const topTitle = `╭─ ${bold(flame(`Elysium Harness v${info.version}`))} `;
+  const topRest = Math.max(0, inner + 2 - stripAnsi(topTitle).length);
+  return [
+    ...FIRE_MARK_ROWS.map((row2, i) => FIRE_MARK_COLORS[i]?.(row2) ?? row2),
+    "",
+    `${topTitle}${dim("─".repeat(topRest))}╮`,
+    ...Array.from({ length: rowLines }, (_, i) => row(leftAll[i] ?? "", right[i] ?? "")),
+    dim(`╰${"─".repeat(inner + 2)}╯`),
+  ].join("\n");
+}
+
+/**
+ * One-line inverted status strip (dark-red bg, flame fg). Non-TTY: empty.
+ * Call again (e.g. after /status or a turn) to print a refreshed one.
+ */
+export function statusBar(info: {
+  model: string;
+  mode: string;
+  tokens: number;
+  turns: number;
+}): string {
+  if (!COLORS_ENABLED) return "";
+  const termW = Math.max(60, process.stdout.columns ?? 100);
+  const text = `  ◆ ${info.model} · ${info.mode} · ${info.tokens} tok · ${info.turns} turns · /help `;
+  const visible = stripAnsi(text).length;
+  const pad = " ".repeat(Math.max(0, termW - visible));
+  return `\u001B[48;5;52m\u001B[38;5;214m${text}${pad}\u001B[0m`;
+}
+
+function truncatePlain(s: string, w: number): string {
+  return s.length <= w ? s : `${s.slice(0, Math.max(1, w - 1))}…`;
+}
+
+function padRight(s: string, w: number): string {
+  const visible = stripAnsi(s).length;
+  return visible >= w ? s : `${s}${" ".repeat(w - visible)}`;
 }
 
 /**

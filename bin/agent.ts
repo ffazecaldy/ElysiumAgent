@@ -70,14 +70,16 @@ import {
   yellow,
   marks,
   section,
-  box,
-  hr,
   kv,
   spinner,
   thinkingSpinner,
   magenta,
   translateProviderError,
+  fire,
+  welcomeScreen,
+  statusBar,
 } from "../packages/cli/src/ui";
+import { CLI_VERSION } from "../packages/cli/src/index";
 import { runSwarmGoal, type SwarmEvent } from "../packages/cli/src/swarm-mode";
 import { createSwarmView, type SwarmView } from "../packages/cli/src/swarm-view";
 import { collectSkills, skillRoots, skillsPromptBlock } from "../packages/cli/src/skills";
@@ -818,25 +820,25 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   const state: ReplState = { config: startConfig, committed: startConfig };
   let agent = wireAgentFor(state.committed, registry, { stats });
 
-  console.log(box("ELYSIUM", "AI agent with tool use"));
-  console.log();
-  console.log(kv("provider", describeConfig(state.committed)));
-  console.log(kv("cwd", process.cwd()));
-  console.log(kv("artifacts", WORKSPACE));
-  console.log(kv("mode", MODES[currentMode].label));
-  console.log(kv("tools", "read write edit bash"));
   console.log(
-    kv(
-      "skills",
-      SKILLS.length > 0 ? SKILLS.map((s) => s.name).join(", ") : "(none — add dirs under skills/)",
-    ),
+    welcomeScreen({
+      version: CLI_VERSION,
+      provider: PROVIDER_NAMES[state.committed.provider] ?? state.committed.provider,
+      model: state.committed.model,
+      session: `s-${Date.now().toString(36)}`,
+      mode: MODES[currentMode].label,
+      workspace: WORKSPACE,
+      tools: [...registry.list().map((t) => t.name)],
+      skills: SKILLS.map((s) => s.name),
+    }),
   );
+  console.log(`  ${dim(`${process.cwd()} · artifacts ${WORKSPACE}`)}`);
   console.log(`  ${dim("Type /help for commands. Ctrl+C aborts a run; twice to quit.\n")}`);
 
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: `${cyan("❯")} `,
+    prompt: `${fire("❯")} `,
     historySize: 100,
   });
   rl.prompt();
@@ -1105,9 +1107,19 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
     const secs = dt / 1000;
     const tps = secs > 0 ? (result.usage.outputTokens / secs).toFixed(1) : "-";
     const totalTokens = result.usage.inputTokens + result.usage.outputTokens;
-    console.log(
-      `  ${dim(`─ ${totalTokens} tok · ${tps} tok/s · ${(dt / 1000).toFixed(1)}s${result.stopReason === "aborted" ? " · aborted" : ""}`)}`,
-    );
+    const strip = statusBar({
+      model: xo.committed().model,
+      mode: currentMode,
+      tokens: xo.stats.tokensIn + xo.stats.tokensOut,
+      turns: xo.stats.turns,
+    });
+    if (strip.length > 0) {
+      console.log(strip);
+    } else {
+      console.log(
+        `  ${dim(`─ ${totalTokens} tok · ${tps} tok/s · ${(dt / 1000).toFixed(1)}s${result.stopReason === "aborted" ? " · aborted" : ""}`)}`,
+      );
+    }
   } catch (err: unknown) {
     if (err instanceof RecoverableCliError) {
       renderRecoverableError(err.message, err.action);

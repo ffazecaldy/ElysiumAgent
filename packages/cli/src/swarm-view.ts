@@ -29,7 +29,7 @@
  * Non-TTY (piped/tests): nothing is redrawn — events degrade to compact
  * linear lines, so piped output stays deterministic.
  */
-import { cyan, dim, green, magenta, red, stripAnsi, yellow, marks } from "./ui";
+import { amber, cyan, dim, fire, green, magenta, red, stripAnsi, yellow, marks } from "./ui";
 
 /** Maximum simultaneous subagent panes (the "max 3 visible" rule). */
 export const MAX_PANES = 3;
@@ -146,10 +146,10 @@ export function createSwarmView(): SwarmView {
     const rows: string[] = [];
 
     // ── Header ──
-    rows.push(clip(`╭─ ${cyan("ELYSIUM SWARM")}  ${dim(truncate(goalText, inner - 18))}`, inner));
+    rows.push(clip(`╭─ ${fire("ELYSIUM SWARM")}  ${dim(truncate(goalText, inner - 18))}`, inner));
 
     // ── MASTER: every task, full list ──
-    rows.push(`  ${cyan("MASTER")}`);
+    rows.push(`  ${amber("MASTER")}`);
     for (const id of order) {
       const t = tasks.get(id);
       if (!t) continue;
