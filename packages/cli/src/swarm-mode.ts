@@ -96,6 +96,9 @@ export interface RunSwarmGoalOptions {
   maxSubtasks?: number;
   /** Optional event sink for the whole gauntlet loop. */
   onEvent?: (e: SwarmEvent) => void;
+  /** Cooperative cancellation: when aborted, the run stops (planner, builder
+   * tool calls and critic requests all observe the same signal). */
+  signal?: AbortSignal;
 }
 
 /** Per-subtask quality-gate outcome attached to the orchestration report. */
@@ -184,12 +187,14 @@ async function completeOnce(
   provider: LlmProvider,
   systemPrompt: string,
   prompt: string,
+  signal?: AbortSignal,
 ): Promise<string> {
   let text = "";
   for await (const event of provider.stream({
     systemPrompt,
     messages: [{ role: "user", content: prompt }],
     tools: [],
+    ...(signal !== undefined ? { signal } : {}),
   })) {
     if (event.type === "text_delta") {
       text += event.delta;
@@ -248,7 +253,8 @@ function withUniqueIds(subtasks: PlannedSubtask[]): PlannedSubtask[] {
   });
 }
 
-function parsePlannerOutput(
+/** @internal testing export: tolerant planner-output parse. */
+export function parsePlannerOutput(
   raw: string,
   goal: string,
   maxSubtasks: number,
@@ -280,7 +286,8 @@ function buildPlannerPrompt(goal: string, n: number): string {
 
 // ── Critic ────────────────────────────────────────────────────────
 
-function parseCriticVerdict(raw: string): CriticVerdict {
+/** @internal testing export: tolerant critic-verdict parse. */
+export function parseCriticVerdict(raw: string): CriticVerdict {
   const block = extractFirstJsonBlock(raw);
   if (block !== null) {
     try {
@@ -372,8 +379,9 @@ const OUTPUT_FLUSH_MS = 200;
  * the event stream. A timer flushes any partial line after
  * {@link OUTPUT_FLUSH_MS} of inactivity, and `flush()` drains the remainder
  * when the stream ends.
+ * @internal testing export.
  */
-class StreamLineBatcher {
+export class StreamLineBatcher {
   readonly #onLine: (text: string) => void;
   readonly #flushEveryMs: number;
   #buffer = "";
@@ -423,6 +431,9 @@ class StreamLineBatcher {
  * LLM/provider failures emit a SwarmEvent "error" and then rethrow.
  */
 export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoalReport> {
+  if (opts.signal?.aborted) {
+    throw new Error("swarm aborted");
+  }
   const maxSubtasks = Math.max(1, Math.floor(opts.maxSubtasks ?? DEFAULT_MAX_SUBTASKS));
   const emitSwarm = (event: SwarmEvent): void => {
     opts.onEvent?.(event);
@@ -443,6 +454,7 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
       provider,
       JSON_ONLY_SYSTEM_PROMPT,
       buildPlannerPrompt(opts.goal, maxSubtasks),
+      opts.signal,
     );
     planned = parsePlannerOutput(raw, opts.goal, maxSubtasks);
   } catch (error: unknown) {
@@ -614,6 +626,7 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
         provider,
         JSON_ONLY_SYSTEM_PROMPT,
         buildCriticPrompt(task, result),
+        opts.signal,
       );
       const verdict = parseCriticVerdict(raw);
       emitSwarm({
@@ -650,6 +663,7 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
     critic,
     repairRounds: REPAIR_ROUNDS,
     maxConcurrency: MAX_CONCURRENCY,
+    signal: opts.signal,
     onEvent: (event: HarnessEvent): void => {
       // Map orchestrator telemetry onto the runtime-mode event surface;
       // latency-style events are not part of it and are dropped.

@@ -6,8 +6,15 @@ import fs from "node:fs";
 import path from "node:path";
 
 export type ProviderName =
-  | "openai" | "deepseek" | "groq" | "together" | "openrouter"
-  | "ollama" | "glm" | "opencode" | "mock";
+  | "openai"
+  | "deepseek"
+  | "groq"
+  | "together"
+  | "openrouter"
+  | "ollama"
+  | "glm"
+  | "opencode"
+  | "mock";
 
 export interface ProviderConfig {
   provider: ProviderName;
@@ -51,6 +58,18 @@ export const PROVIDER_NAMES: Record<string, string> = {
   mock: "Mock (offline)",
 };
 
+/** Strip one pair of matching surrounding quotes ("…" or '…') if present. */
+function stripQuotes(value: string): string {
+  if (
+    value.length >= 2 &&
+    ((value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'")))
+  ) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
 /** Load .env file (simple KEY=VALUE parser). */
 function loadEnvFile(dir: string): Record<string, string> {
   const envPath = path.join(dir, ".env");
@@ -61,7 +80,7 @@ function loadEnvFile(dir: string): Record<string, string> {
     if (trimmed === "" || trimmed.startsWith("#")) continue;
     const eq = trimmed.indexOf("=");
     if (eq < 0) continue;
-    result[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+    result[trimmed.slice(0, eq).trim()] = stripQuotes(trimmed.slice(eq + 1).trim());
   }
   return result;
 }
@@ -87,21 +106,30 @@ export function saveEnvValue(projectRoot: string, key: string, value: string): v
   if (fs.existsSync(envPath)) {
     lines = fs.readFileSync(envPath, "utf-8").split("\n");
   }
+  // Quote values that contain whitespace or special chars; the paired double
+  // quotes are stripped again by the loadEnvFile parser (stripQuotes).
+  const stored = /[\s#"']/.test(value) ? JSON.stringify(value) : value;
   const idx = lines.findIndex((l) => l.trim().startsWith(key + "="));
   if (idx >= 0) {
-    lines[idx] = `${key}=${value}`;
+    lines[idx] = `${key}=${stored}`;
   } else {
-    lines.push(`${key}=${value}`);
+    lines.push(`${key}=${stored}`);
   }
   fs.writeFileSync(envPath, lines.join("\n"), "utf-8");
+}
+
+/**
+ * Mask a secret for display: first 3 + ellipsis + last 3 chars.
+ * Shorter secrets render as "***" (nothing worth revealing).
+ */
+export function maskSecret(key: string): string {
+  return key.length >= 16 ? key.slice(0, 3) + "…" + key.slice(-3) : "***";
 }
 
 /** Return a human-readable description of the current config. */
 export function describeConfig(config: ProviderConfig): string {
   if (config.provider === "mock") return "MockProvider (deterministic, offline)";
   const name = PROVIDER_NAMES[config.provider] ?? config.provider;
-  const masked = config.apiKey
-    ? config.apiKey.slice(0, 8) + "***" + config.apiKey.slice(-4)
-    : "(no key)";
+  const masked = config.apiKey ? maskSecret(config.apiKey) : "(no key)";
   return `${name} | ${config.model} | key: ${masked}`;
 }

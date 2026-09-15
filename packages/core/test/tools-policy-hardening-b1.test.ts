@@ -119,10 +119,7 @@ describe("bash tool returns isError results, never throws", () => {
       deniedCommands: ["("],
     };
     const tool = createBashTool(policy);
-    const result = await tool.execute(
-      { command: "rm -rf /does-not-matter" },
-      makeCtx(root),
-    );
+    const result = await tool.execute({ command: "rm -rf /does-not-matter" }, makeCtx(root));
     expect(result.isError).toBe(true);
     expect(result.content).toBe("blocked by policy");
   });
@@ -131,23 +128,33 @@ describe("bash tool returns isError results, never throws", () => {
     const root = makeRoot("elysium-b1-bash-");
     const tool = createBashTool(policyFor(root));
     const result = await tool.execute(
-      { command: "node -e \"console.log(1)\"", cwd: "../outside-escape" },
+      { command: 'node -e "console.log(1)"', cwd: "../outside-escape" },
       makeCtx(root),
     );
     expect(result.isError).toBe(true);
     expect(result.content).toContain("outside the allowed roots");
   });
 
-  it("reports an exec timeout as an isError result", { timeout: 60_000 }, async () => {
-    const root = makeRoot("elysium-b1-bash-");
-    const tool = createBashTool(policyFor(root));
-    // Hangs well past the 30s exec timeout.
-    const result = await tool.execute(
-      { command: "node -e \"setInterval(() => {}, 1000)\"" },
-      makeCtx(root),
-    );
-    expect(result.isError).toBe(true);
-    expect(result.content).toContain("timed out");
+  it("reports an exec timeout as an isError result", async () => {
+    const previous = process.env.ELYSIUM_BASH_TIMEOUT_MS;
+    process.env.ELYSIUM_BASH_TIMEOUT_MS = "300";
+    try {
+      const root = makeRoot("elysium-b1-bash-");
+      const tool = createBashTool(policyFor(root));
+      // Sleeps well past the 300ms configured timeout.
+      const result = await tool.execute(
+        { command: 'node -e "setTimeout(() => {}, 5000)"' },
+        makeCtx(root),
+      );
+      expect(result.isError).toBe(true);
+      expect(result.content).toContain("timed out");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ELYSIUM_BASH_TIMEOUT_MS;
+      } else {
+        process.env.ELYSIUM_BASH_TIMEOUT_MS = previous;
+      }
+    }
   });
 
   it("reports a pre-aborted signal as an isError result without spawning", async () => {
@@ -155,7 +162,10 @@ describe("bash tool returns isError results, never throws", () => {
     const tool = createBashTool(policyFor(root));
     const controller = new AbortController();
     controller.abort();
-    const result = await tool.execute({ command: "echo hi" }, makeCtx(root, { signal: controller.signal }));
+    const result = await tool.execute(
+      { command: "echo hi" },
+      makeCtx(root, { signal: controller.signal }),
+    );
     expect(result.isError).toBe(true);
     expect(result.content).toContain("aborted by caller");
   });
@@ -191,10 +201,7 @@ describe("read/write/edit builtin operational failures return isError", () => {
   it("write: returns isError when parent directory is missing and createDirs is false", async () => {
     const dir = root();
     const tool = createWriteTool(policyFor(dir));
-    const result = await tool.execute(
-      { path: "no-such-dir/out.txt", content: "x" },
-      makeCtx(dir),
-    );
+    const result = await tool.execute({ path: "no-such-dir/out.txt", content: "x" }, makeCtx(dir));
     expect(result.isError).toBe(true);
     expect(result.content).toContain("parent directory does not exist");
   });
@@ -203,10 +210,7 @@ describe("read/write/edit builtin operational failures return isError", () => {
     const dir = root();
     fs.mkdirSync(path.join(dir, "adir"));
     const tool = createWriteTool(policyFor(dir));
-    const result = await tool.execute(
-      { path: path.join(dir, "adir"), content: "x" },
-      makeCtx(dir),
-    );
+    const result = await tool.execute({ path: path.join(dir, "adir"), content: "x" }, makeCtx(dir));
     expect(result.isError).toBe(true);
     expect(result.content).toContain("directory");
   });
@@ -214,10 +218,7 @@ describe("read/write/edit builtin operational failures return isError", () => {
   it("write: returns isError when the path escapes allowed roots", async () => {
     const dir = root();
     const tool = createWriteTool(policyFor(dir));
-    const result = await tool.execute(
-      { path: "../escape.txt", content: "x" },
-      makeCtx(dir),
-    );
+    const result = await tool.execute({ path: "../escape.txt", content: "x" }, makeCtx(dir));
     expect(result.isError).toBe(true);
     expect(result.content).toContain("outside the allowed roots");
   });
@@ -249,10 +250,7 @@ describe("read/write/edit builtin operational failures return isError", () => {
     const dir = root();
     fs.writeFileSync(path.join(dir, "f.txt"), "a a a", "utf-8");
     const tool = createEditTool(policyFor(dir));
-    const result = await tool.execute(
-      { path: "f.txt", oldText: "a", newText: "b" },
-      makeCtx(dir),
-    );
+    const result = await tool.execute({ path: "f.txt", oldText: "a", newText: "b" }, makeCtx(dir));
     expect(result.isError).toBe(true);
     expect(result.content).toContain("multiple locations");
   });

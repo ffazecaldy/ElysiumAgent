@@ -2,8 +2,9 @@
  * B2 — Credentials + Ctrl+C hardening.
  *
  * Contracts under test (bin/agent.ts + packages/core/src/agent/agent.ts):
- *   (1) /key output is ALWAYS masked (first 4 + "…" + last 4) — the full
- *       key never reaches stdout/stderr.
+ *   (1) /key output is ALWAYS masked via maskSecret (>=16 chars: first 3 +
+ *       "…" + last 3; shorter keys: "***") — the full key never reaches
+ *       stdout/stderr.
  *   (2) Invalid keys (< 8 chars, whitespace, quotes, multi-token) are
  *       rejected BEFORE anything is written, with a recoverable reason.
  *   (3) Ctrl+C while a generation is in flight aborts that run via the
@@ -78,15 +79,15 @@ function runRepl(lines: string[], timeoutMs = 90_000): ReplHandle {
 // ── Test 1: masked output never contains the full key ─────────────
 
 const FULL_KEY = "supersecretkey123";
-const MASKED = "(supe…y123)";
+const MASKED = "(sup…123)";
 
-describe("B2 (1) — /key output is always masked (first4…last4)", () => {
-  it("successful save prints first4…last4 and never the full key on any output line", () => {
+describe("B2 (1) — /key output is always masked (maskSecret)", () => {
+  it("successful save prints the maskSecret mask and never the full key on any output line", () => {
     const handle = runRepl([`/key glm ${FULL_KEY}`, "/quit"]);
     expect(handle.exitCode).toBe(0);
     const savedLine = handle.out.split("\n").find((l) => l.includes("Key saved for")) ?? "";
     expect(savedLine).toContain("ZhiPu GLM");
-    // Exact contract: first 4 + ellipsis + last 4.
+    // Exact contract: maskSecret — 17 chars (>=16) → first3…last3.
     expect(savedLine).toContain(MASKED);
     for (const line of handle.out.split("\n")) {
       expect(line.includes(FULL_KEY), `full key leaked: ${line}`).toBe(false);
@@ -141,10 +142,12 @@ describe("B2 (2) — invalid /key rejected without saving", () => {
     expect(handle.envFile).toBe("ELYSIUM_PROVIDER=mock\n");
   });
 
-  it("boundary: exactly 8 valid chars IS accepted and masked", () => {
+  it("boundary: exactly 8 valid chars IS accepted and masked as ***", () => {
     const handle = runRepl(["/key glm 12345678", "/quit"]);
     expect(handle.out).toContain("Key saved for ZhiPu GLM");
-    expect(handle.out).toContain("(1234…5678)");
+    // Short keys (<16 chars) never appear on stdout in any form: "***".
+    expect(handle.out).toContain("(***)");
+    expect(handle.out).not.toContain("1234…5678");
     expect(handle.envFile).toContain("ELYSIUM_API_KEY=12345678");
   });
 });

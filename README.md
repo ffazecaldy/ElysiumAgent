@@ -120,9 +120,9 @@ For live judging, swap in `createLlmJudge(provider)`.
 | `/status` | Session status line: provider/model, tool count, turns, messages |
 | `/history` | Show the conversation history of the current session |
 | `/clear-chat` | Clear the in-memory conversation (fresh chat, same REPL) |
-| `/save` | Save the current session to a JSONL file under `.elysium/sessions/` |
+| `/save` | Save the session transcript as markdown to the temp workspace (path via `/workspace`) |
 | `/mode [min\|medium\|high\|max]` | Set the effort mode for this session; `/mode` alone shows the active one (see [Effort modes](#effort-modes)) |
-| `/swarm <goal>` | Run the goal in Swarmloop mode (see below) |
+| `/swarm <goal>` | Run the goal in Swarmloop mode (see below) — repair rounds are **fixed at 1** regardless of effort mode |
 | `/skills` | List indexed skills (from `skills/` dirs or `ELYSIUM_SKILLS_DIR`) |
 | `/quit` | Exit cleanly |
 
@@ -147,7 +147,7 @@ For live judging, swap in `createLlmJudge(provider)`.
 | `high` | 12 | 5 | 2 | visible | Stricter — explicit verification steps |
 | `max` | 16 | 6 | 2 | visible | Strictest — double-check everything |
 
-What each column controls: max turns caps the agent loop per turn; swarm subtasks caps the planner's fan-out in `/swarm`; repair rounds is the number of critic-driven retries per failed subtask; tool output visibility controls whether tool results are echoed in the REPL; the system prompt column describes how prescriptive the system prompt is at that mode. `/mode` without arguments shows the active mode.
+What each column controls: max turns caps the agent loop per turn; swarm subtasks caps the planner's fan-out in `/swarm`; repair rounds is the number of critic-driven retries per failed subtask (note: `/swarm` ignores this column and always uses exactly **1** repair round); tool output visibility controls whether tool results are echoed in the REPL; the system prompt column describes how prescriptive the system prompt is at that mode. `/mode` without arguments shows the active mode.
 
 **Ctrl+C abort**: pressing Ctrl+C during an in-flight agent turn aborts the current turn (via the turn's `AbortSignal`) and returns to the prompt; the provider session and REPL state survive. Pressing it at the prompt exits cleanly (two Ctrl+C within 3 seconds while idle also exits).
 
@@ -158,10 +158,10 @@ Swarmloop mode is a gauntlet-style orchestration profile built on the same depth
 1. **Plan** — your goal goes to a planner agent that decomposes it into subtasks.
 2. **Build** — parallel builder agents (with tool access) execute the subtasks.
 3. **Judge** — a fresh-context critic (sees only the artifact, never the builder's history) judges each result.
-4. **Repair** — failed results get the effort mode's repair rounds (1 at the default `medium`) with the critic's gaps as feedback.
+4. **Repair** — failed results get exactly **one** repair round (fixed — the effort mode does **not** change it) with the critic's gaps as feedback.
 5. **Report** — the final report carries per-subtask status, critic verdicts, and quality scores.
 
-Run it from the REPL: `/swarm your-goal`. The number of subtasks is capped (`maxSubtasks`, set by the current effort mode — see [Effort modes](#effort-modes)); a vague goal cannot fan out into an unbounded swarm. Repair rounds also follow the effort mode (1 at the default `medium`).
+Run it from the REPL: `/swarm your-goal`. The number of subtasks is capped (`maxSubtasks`, set by the current effort mode — see [Effort modes](#effort-modes)); a vague goal cannot fan out into an unbounded swarm. Repair rounds are instead **fixed at 1** and do not follow the effort mode.
 
 **Live progress**: during execution the REPL streams what each subagent does in real time — its text output and tool calls, each line prefixed by the subtask's `taskId` — plus critic verdicts and repair rounds as they happen, so the gauntlet is observable end-to-end rather than silent until the final report.
 

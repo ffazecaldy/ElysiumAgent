@@ -3,7 +3,24 @@ import type { PathPolicy, Tool, ToolContext, ToolResult } from "../../types/tool
 import { argString, err, ok, telemetry } from "../internal";
 import { evaluateCommand, resolveWithin } from "../policy";
 
-const BASH_TIMEOUT_MS = 30_000;
+function bashTimeoutMs(): number {
+  const raw = Number(process.env.ELYSIUM_BASH_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 30_000;
+}
+
+const SECRET_PATTERNS: RegExp[] = [
+  /sk-\S+/gi,
+  /Bearer\s+\S+/gi,
+  /(api[_-]?key|token|password|authorization)\s*[=:]\s*\S+/gi,
+];
+
+function redactSecrets(text: string): string {
+  let redacted = text;
+  for (const pattern of SECRET_PATTERNS) {
+    redacted = redacted.replace(pattern, "[REDACTED]");
+  }
+  return redacted;
+}
 
 interface ProcessOutcome {
   stdout: string;
@@ -16,23 +33,21 @@ interface ProcessOutcome {
   spawnError?: string;
 }
 
-function runCommand(
-  command: string,
-  cwd: string,
-  signal: AbortSignal,
-): Promise<ProcessOutcome> {
+function runCommand(command: string, cwd: string, signal: AbortSignal): Promise<ProcessOutcome> {
   return new Promise((resolve) => {
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
       onAbort();
-    }, BASH_TIMEOUT_MS);
+    }, bashTimeoutMs());
     timer.unref?.();
+    let killWatchdog: NodeJS.Timeout | undefined;
     const child = exec(
       command,
       { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
       (error, stdout, stderr) => {
         clearTimeout(timer);
+        if (killWatchdog !== undefined) clearTimeout(killWatchdog);
         let code: number | null = null;
         let killed = false;
         let spawnError: string | undefined;
@@ -67,16 +82,42 @@ function runCommand(
       // the stdio pipes open so exec's callback never fires. Empirically,
       // `taskkill /T /F` alone terminates the whole tree and lets the
       // callback fire; pairing it with child.kill() is what breaks it.
+      //
+      // Belt and braces: a watchdog force-resolves the promise ~5s after the
+      // kill starts, so a stubborn orphan can never leave the caller hanging.
+      if (killWatchdog === undefined) {
+        killWatchdog = setTimeout(() => {
+          killWatchdog = undefined;
+          resolve({ stdout: "", stderr: "", code: null, killed: true });
+        }, 5_000);
+        killWatchdog.unref?.();
+      }
       if (process.platform === "win32") {
-        try {
-          spawn("taskkill", ["/T", "/F", "/PID", String(child.pid ?? -1)], {
-            windowsHide: true,
-            stdio: "ignore",
-          });
-        } catch {
-          // Fall back to the wrapper kill: better a orphan than a hang.
+        if (child.pid === undefined) {
+          // Nothing to tree-kill: fall back to the wrapper kill.
           child.kill("SIGKILL");
+          return;
         }
+        const killer = spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], {
+          windowsHide: true,
+          stdio: "ignore",
+        });
+        // Await taskkill's exit, capped at 5s.
+        const cap = setTimeout(() => {
+          killer.kill("SIGKILL");
+          child.kill("SIGKILL");
+        }, 5_000);
+        cap.unref?.();
+        killer.once("exit", () => {
+          clearTimeout(cap);
+          // taskkill completed; the tree should be gone and the exec
+          // callback imminent. The watchdog covers a stubborn survivor.
+        });
+        killer.once("error", () => {
+          clearTimeout(cap);
+          // taskkill failed to spawn: fall back to the wrapper kill.
+          child.kill("SIGKILL");
+        });
       } else {
         child.kill("SIGKILL");
         try {
@@ -147,7 +188,7 @@ export function createBashTool(policy: PathPolicy): Tool {
           ctx.emit({
             type: "custom",
             timestamp: new Date().toISOString(),
-            data: { warn: true, tool: "bash", command },
+            data: { warn: true, tool: "bash", command: redactSecrets(command) },
           });
         }
         const { stdout, stderr, code, killed, spawnError } = await runCommand(

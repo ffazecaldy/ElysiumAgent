@@ -63,14 +63,23 @@ export class Session {
     for (let i = this.log.length - 1; i >= 0; i--) {
       const e = this.log[i];
       if (e && e.data.kind === "meta" && e.data.label.startsWith("leaf:")) {
-        this.leaf = e.data.label.slice(5); // "leaf:<id>" -> id
+        const restored = e.data.label.slice(5); // "leaf:<id>" -> id
+        // A bare "leaf:" marker is an explicit null leaf (restore(null)).
+        this.leaf = restored.length > 0 ? restored : null;
         break;
       }
     }
-    const last = this.log[this.log.length - 1];
-    if (last) {
-      const num = Number.parseInt(last.id.slice(1), 10);
-      this.counter = Number.isFinite(num) ? num : this.log.length;
+    // Counter = MAX over every parseable entry id (not just the last line):
+    // a hand-edited log must never yield duplicate ids on append.
+    let maxId = 0;
+    for (const e of this.log) {
+      const num = Number.parseInt(e.id.slice(1), 10);
+      if (Number.isSafeInteger(num) && num > maxId) maxId = num;
+    }
+    if (maxId > 0) {
+      this.counter = maxId;
+    } else if (this.log.length > 0) {
+      this.counter = this.log.length;
     }
   }
 
@@ -129,13 +138,17 @@ export class Session {
       throw new Error(`entry not found: ${entryIdStr}`);
     }
     this.leaf = entryIdStr;
-    // Persist leaf pointer as a meta entry for durability across reloads.
+    this.persistLeafMarker(entryIdStr);
+  }
+
+  /** Persist the leaf pointer as a meta entry for durability across reloads. */
+  private persistLeafMarker(target: string | null): void {
     this.counter += 1;
     const marker: SessionEntry = {
       id: entryId(this.counter),
-      parentId: entryIdStr,
+      parentId: target,
       timestamp: nowIso(),
-      data: { kind: "meta", label: "leaf:" + entryIdStr },
+      data: { kind: "meta", label: "leaf:" + (target ?? "") },
     };
     this.log.push(marker);
     this.persist(marker);
@@ -155,6 +168,8 @@ export class Session {
       this.setLeaf(cp.entryId);
     } else {
       this.leaf = null;
+      // Persist the null leaf too, so a reload stays on the empty branch.
+      this.persistLeafMarker(null);
     }
   }
 

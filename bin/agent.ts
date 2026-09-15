@@ -6,7 +6,9 @@
  *   pnpm agent "do something"      Single task
  *   pnpm agent --help              Show help
  *
- * Slash commands in REPL: /mode /model /key /connections /tools /workspace /clear /help /quit
+ * REPL slash commands: type /help inside the REPL for the authoritative,
+ * always-current list (kept in sync with the dispatcher there — don't
+ * duplicate it here).
  *
  * Providers are configured in .env (see .env.example) or via /key.
  * Credential precedence: real environment variables (ELYSIUM_*) win over
@@ -51,6 +53,7 @@ import {
   loadConfig,
   saveEnvValue,
   describeConfig,
+  maskSecret,
   PROVIDER_NAMES,
   PROVIDER_MODELS,
   PROVIDER_URLS,
@@ -87,10 +90,9 @@ import { collectSkills, skillRoots, skillsPromptBlock } from "../packages/cli/sr
 const PROJECT_ROOT = process.env.ELYSIUM_PROJECT_ROOT
   ? path.resolve(process.env.ELYSIUM_PROJECT_ROOT)
   : path.resolve(import.meta.dirname, "..");
-const WORKSPACE = fs.mkdtempSync(path.join(
-  process.env.TEMP || process.env.TMP || "/tmp",
-  "elysium-",
-));
+const WORKSPACE = fs.mkdtempSync(
+  path.join(process.env.TEMP || process.env.TMP || "/tmp", "elysium-"),
+);
 
 const SYSTEM_PROMPT =
   "You are Elysium, an AI coding agent. " +
@@ -186,7 +188,14 @@ interface SessionStats {
 }
 
 function newSessionStats(): SessionStats {
-  return { startedAt: Date.now(), prompts: [], tokensIn: 0, tokensOut: 0, turns: 0, transcript: [] };
+  return {
+    startedAt: Date.now(),
+    prompts: [],
+    tokensIn: 0,
+    tokensOut: 0,
+    turns: 0,
+    transcript: [],
+  };
 }
 
 /**
@@ -218,7 +227,9 @@ const CREDENTIAL_LESS = new Set<string>(["mock", "ollama"]);
 function makeProvider(config: ProviderConfig) {
   if (config.provider === "mock") {
     return new MockProvider([
-      { text: "I am running in mock mode (offline). Configure a real provider with /key or .env file." },
+      {
+        text: "I am running in mock mode (offline). Configure a real provider with /key or .env file.",
+      },
     ]);
   }
   return new OpenAICompatibleProvider({
@@ -257,18 +268,36 @@ function wireAgentFor(
     executeTool: async (call, ctx): Promise<ToolResultMessage> => {
       const tool = registry.get(call.name);
       if (!tool) {
-        return { role: "tool_result", toolCallId: call.id, toolName: call.name, content: `unknown tool: ${call.name}`, isError: true };
+        return {
+          role: "tool_result",
+          toolCallId: call.id,
+          toolName: call.name,
+          content: `unknown tool: ${call.name}`,
+          isError: true,
+        };
       }
       try {
-        const result = await tool.execute(call.arguments, { cwd: process.cwd(), signal: ctx.signal, emit: (e) => eventBus.emit(e) });
+        const result = await tool.execute(call.arguments, {
+          cwd: process.cwd(),
+          signal: ctx.signal,
+          emit: (e) => eventBus.emit(e),
+        });
         return {
-          role: "tool_result", toolCallId: call.id, toolName: call.name,
-          content: result.content, isError: result.isError,
+          role: "tool_result",
+          toolCallId: call.id,
+          toolName: call.name,
+          content: result.content,
+          isError: result.isError,
           ...(result.details !== undefined ? { details: result.details } : {}),
         };
       } catch (err: unknown) {
-        return { role: "tool_result", toolCallId: call.id, toolName: call.name,
-          content: `error: ${err instanceof Error ? err.message : String(err)}`, isError: true };
+        return {
+          role: "tool_result",
+          toolCallId: call.id,
+          toolName: call.name,
+          content: `error: ${err instanceof Error ? err.message : String(err)}`,
+          isError: true,
+        };
       }
     },
     // Live streaming: the ANSWER prints in normal readable color (white);
@@ -318,7 +347,9 @@ function wireAgentFor(
         if (m) {
           const status = m.isError ? red("err") : green("ok");
           const preview = m.content.length > 90 ? m.content.slice(0, 90) + "…" : m.content;
-          console.log(`\n  ${dim("tool " + m.toolName + " " + status + "  " + preview.replace(/\n/g, " "))}`);
+          console.log(
+            `\n  ${dim("tool " + m.toolName + " " + status + "  " + preview.replace(/\n/g, " "))}`,
+          );
         }
       }
     },
@@ -380,12 +411,11 @@ function validateApiKey(key: string): string | null {
 }
 
 /**
- * Non-reversible display mask: first 4 chars + ellipsis + last 4.
- * A key shorter than the minimum is rejected before this can be called.
+ * Non-reversible display mask — thin delegation to the shared maskSecret()
+ * from packages/cli/src/config so CLI and config masking never drift.
  */
 function maskKey(key: string): string {
-  if (key.length < MIN_KEY_LENGTH) return "***";
-  return `${key.slice(0, 4)}…${key.slice(-4)}`;
+  return maskSecret(key);
 }
 
 // ── Command dispatcher (transactional provider switching) ────────
@@ -443,7 +473,7 @@ async function dispatchCommand(
     console.log(`\n  Current: ${describeConfig(state.config)}`);
     console.log(`\n  Available providers:`);
     for (const [k, v] of Object.entries(PROVIDER_NAMES)) {
-      console.log(`    ${(k === state.committed.provider ? "* " : "  ")}${k.padEnd(12)} ${v}`);
+      console.log(`    ${k === state.committed.provider ? "* " : "  "}${k.padEnd(12)} ${v}`);
     }
     console.log();
     return;
@@ -485,9 +515,12 @@ async function dispatchCommand(
     // Build candidate config, validate BEFORE touching the live one.
     // Read the provider's key from the live .env (user may have set it via /key).
     const freshEnv = loadConfig(PROJECT_ROOT);
-    const candidateKey = target === freshEnv.provider
-      ? freshEnv.apiKey
-      : target === state.committed.provider ? state.committed.apiKey : "";
+    const candidateKey =
+      target === freshEnv.provider
+        ? freshEnv.apiKey
+        : target === state.committed.provider
+          ? state.committed.apiKey
+          : "";
     const candidate: ProviderConfig = {
       ...state.committed,
       provider: target as ProviderName,
@@ -522,37 +555,56 @@ async function dispatchCommand(
       throw new RecoverableCliError("Missing arguments", "Usage: /key <provider> <api-key>");
     }
     if (parts.length > 2) {
-      throw new RecoverableCliError("Key must be a single token", "Usage: /key <provider> <api-key> — no spaces inside the key");
+      throw new RecoverableCliError(
+        "Key must be a single token",
+        "Usage: /key <provider> <api-key> — no spaces inside the key",
+      );
     }
     const prov = parts[0]!;
     const key = parts[1]!;
     if (!(prov in PROVIDER_URLS) && prov !== "mock") {
       throw new UnknownProviderError(prov);
     }
+    if (CREDENTIAL_LESS.has(prov)) {
+      throw new RecoverableCliError(
+        "mock/ollama non richiedono chiave",
+        `Nessuna azione necessaria: ${PROVIDER_NAMES[prov] ?? prov} funziona senza API key`,
+      );
+    }
     // Validated BEFORE anything is persisted: a rejected key leaves the
     // .env untouched and the committed provider unchanged.
     const rejection = validateApiKey(key);
     if (rejection !== null) {
-      throw new RecoverableCliError(rejection, `Usage: /key ${prov} <api-key> (>= 8 chars, no spaces, no quotes)`);
+      throw new RecoverableCliError(
+        rejection,
+        `Usage: /key ${prov} <api-key> (>= 8 chars, no spaces, no quotes)`,
+      );
     }
     saveEnvValue(PROJECT_ROOT, "ELYSIUM_API_KEY", key);
     saveEnvValue(PROJECT_ROOT, "ELYSIUM_PROVIDER", prov);
-    console.log(`\n  ${green(marks.ok)} Key saved for ${PROVIDER_NAMES[prov] ?? prov} (${maskKey(key)})`);
+    console.log(
+      `\n  ${green(marks.ok)} Key saved for ${PROVIDER_NAMES[prov] ?? prov} (${maskKey(key)})`,
+    );
     console.log(`  → Now switch: /model ${prov}\n`);
     return;
   }
   if (input === "/connections") {
     console.log(`\n  Providers (configured in .env or via /key):`);
     for (const [name, url] of Object.entries(PROVIDER_URLS)) {
-      const configured = name in CREDENTIAL_LESS ? "ready (no key needed)" : "key required (/key <provider> <key>)";
-      console.log(`    ${name.padEnd(12)} ${String(PROVIDER_NAMES[name]).padEnd(16)} ${url.padEnd(40)} ${configured}`);
+      const configured =
+        name in CREDENTIAL_LESS ? "ready (no key needed)" : "key required (/key <provider> <key>)";
+      console.log(
+        `    ${name.padEnd(12)} ${String(PROVIDER_NAMES[name]).padEnd(16)} ${url.padEnd(40)} ${configured}`,
+      );
     }
     console.log();
     return;
   }
   if (input === "/skills") {
     if (SKILLS.length === 0) {
-      console.log(`\n  No skills indexed. Add a directory with a SKILL.md (frontmatter: name, description) under one of:`);
+      console.log(
+        `\n  No skills indexed. Add a directory with a SKILL.md (frontmatter: name, description) under one of:`,
+      );
       for (const root of skillRoots(PROJECT_ROOT)) console.log(`    ${root}`);
       console.log();
       return;
@@ -562,7 +614,9 @@ async function dispatchCommand(
       console.log(`  ${cyan(s.name)}  ${dim(s.description)}`);
       console.log(`    ${dim(s.file)}`);
     }
-    console.log(`\n  ${dim("The agent reads a skill's SKILL.md with the read tool when the task matches.")}\n`);
+    console.log(
+      `\n  ${dim("The agent reads a skill's SKILL.md with the read tool when the task matches.")}\n`,
+    );
     return;
   }
   if (input === "/tools") {
@@ -581,14 +635,15 @@ async function dispatchCommand(
     if (!xo) return;
     const st = xo.stats;
     const upMs = Date.now() - st.startedAt;
-    const up = upMs >= 60000
-      ? `${Math.floor(upMs / 60000)}m ${Math.floor((upMs % 60000) / 1000)}s`
-      : `${Math.floor(upMs / 1000)}s`;
+    const up =
+      upMs >= 60000
+        ? `${Math.floor(upMs / 60000)}m ${Math.floor((upMs % 60000) / 1000)}s`
+        : `${Math.floor(upMs / 1000)}s`;
     const committed = xo.committed();
     console.log(section("session"));
     console.log(`  ${kv("provider", PROVIDER_NAMES[committed.provider] ?? committed.provider)}`);
     console.log(`  ${kv("model", committed.model)}`);
-    console.log(`  ${kv("key", committed.apiKey ? committed.apiKey.slice(0, 4) + "…" + committed.apiKey.slice(-4) : "(none)")}`);
+    console.log(`  ${kv("key", committed.apiKey ? maskSecret(committed.apiKey) : "(none)")}`);
     console.log(`  ${kv("turns", String(st.turns))}`);
     console.log(`  ${kv("tokens", String(st.tokensIn + st.tokensOut))}`);
     console.log(`  ${kv("uptime", up)}`);
@@ -622,12 +677,17 @@ async function dispatchCommand(
   }
   if (input === "/save") {
     if (!xo) return;
-    const file = path.join(WORKSPACE, `session-${new Date().toISOString().replace(/[:.]/g, "-")}.md`);
+    const file = path.join(
+      WORKSPACE,
+      `session-${new Date().toISOString().replace(/[:.]/g, "-")}.md`,
+    );
     const lines = [
-      "# Elysium session transcript", "",
+      "# Elysium session transcript",
+      "",
       `- date: ${new Date().toISOString()}`,
       `- provider: ${xo.committed().provider} (${xo.committed().model})`,
-      `- turns: ${xo.stats.turns}, tokens: ${xo.stats.tokensIn} in / ${xo.stats.tokensOut} out`, "",
+      `- turns: ${xo.stats.turns}, tokens: ${xo.stats.tokensIn} in / ${xo.stats.tokensOut} out`,
+      "",
     ];
     for (const m of xo.stats.transcript) {
       lines.push(m.role === "user" ? "## > user" : "## elysium", "", m.text, "");
@@ -648,16 +708,30 @@ async function dispatchCommand(
     }
     const sp = spinner();
     sp.start("swarm: planning…");
-    const providerCfg = { baseUrl: committed.baseUrl, apiKey: committed.apiKey || "ollama", model: committed.model };
+    // Ctrl+C/Esc abort seam: SIGINT handlers see the swarm as an in-flight
+    // run via the shared seam; their abort() cancels this controller and
+    // unwinds runSwarmGoal through its AbortSignal.
+    const controller = new AbortController();
+    const runSeam = (
+      globalThis as { __elysiumRunSeam?: { start(a: { abort(): void }): void; end(): void } }
+    ).__elysiumRunSeam;
+    runSeam?.start({ abort: () => controller.abort() });
+    const providerCfg = {
+      baseUrl: committed.baseUrl,
+      apiKey: committed.apiKey || "ollama",
+      model: committed.model,
+    };
     try {
       const report = await runSwarmGoal({
         goal,
         provider: providerCfg,
         maxSubtasks: MODES[currentMode].maxSubtasks,
+        signal: controller.signal,
         onEvent: (e: SwarmEvent) => {
           if (e.type === "plan") {
             sp.stop("plan ready");
-            const tasks = (e.data as { subtasks?: Array<{ id: string; goal: string }> }).subtasks ?? [];
+            const tasks =
+              (e.data as { subtasks?: Array<{ id: string; goal: string }> }).subtasks ?? [];
             console.log(`  ${cyan("plan")}`);
             for (const t of tasks) console.log(`    ${dim(t.id)}  ${t.goal}`);
             console.log();
@@ -670,26 +744,43 @@ async function dispatchCommand(
             console.log(`  ${icon} ${d.taskId ?? ""} ${dim(d.status ?? "")}`);
           } else if (e.type === "critic") {
             const d = e.data as { taskId?: string; passed?: boolean };
-            console.log(`  ${d.passed ? green(marks.ok) : yellow(marks.warn)} critic ${d.taskId ?? ""} ${d.passed ? "passed" : "repair scheduled"}`);
+            console.log(
+              `  ${d.passed ? green(marks.ok) : yellow(marks.warn)} critic ${d.taskId ?? ""} ${d.passed ? "passed" : "repair scheduled"}`,
+            );
           } else if (e.type === "repair") {
-            console.log(`  ${yellow(marks.warn)} repair ${(e.data as { taskId?: string }).taskId ?? ""}`);
+            console.log(
+              `  ${yellow(marks.warn)} repair ${(e.data as { taskId?: string }).taskId ?? ""}`,
+            );
           }
         },
       });
       sp.stop("swarm complete");
       console.log(`\n  ${section("report")}`);
-      console.log(`  ${report.allPassed ? green("all subtasks passed") : yellow("completed with failures")}`);
+      console.log(
+        `  ${report.allPassed ? green("all subtasks passed") : yellow("completed with failures")}`,
+      );
       for (const sub of report.subtasks) {
         const icon = sub.result.status === "pass" ? green(marks.ok) : red(marks.err);
         console.log(`  ${icon} ${sub.task.id}: ${dim(sub.result.summary.slice(0, 100))}`);
       }
       for (const sc of report.scores) {
-        console.log(`  ${cyan("quality")} ${sc.taskId.padEnd(12)} ${sc.weighted}/10 ${sc.passed ? green("pass") : red("fail")}`);
+        console.log(
+          `  ${cyan("quality")} ${sc.taskId.padEnd(12)} ${sc.weighted}/10 ${sc.passed ? green("pass") : red("fail")}`,
+        );
       }
       console.log(`\n  ${dim("workspace: " + report.workspacePath)}\n`);
     } catch (err: unknown) {
+      if (controller.signal.aborted) {
+        // User-initiated cancellation (SIGINT/Esc via the run seam): a
+        // cancelled swarm is not an error — settle quietly and return.
+        sp.stop(undefined, "swarm cancelled");
+        console.log(`\n  ${yellow(marks.warn)} Generation cancelled (Ctrl+C)\n`);
+        return;
+      }
       sp.stop(undefined, "swarm failed");
       throw err;
+    } finally {
+      runSeam?.end();
     }
     return;
   }
@@ -717,7 +808,10 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   console.log(kv("mode", MODES[currentMode].label));
   console.log(kv("tools", "read write edit bash"));
   console.log(
-    kv("skills", SKILLS.length > 0 ? SKILLS.map((s) => s.name).join(", ") : "(none — add dirs under skills/)"),
+    kv(
+      "skills",
+      SKILLS.length > 0 ? SKILLS.map((s) => s.name).join(", ") : "(none — add dirs under skills/)",
+    ),
   );
   console.log(`  ${dim("Type /help for commands. Ctrl+C aborts a run; twice to quit.\n")}`);
 
@@ -742,15 +836,44 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
       const t = raw.trim();
       if (t.length > 0 && !warnedThisRun) {
         warnedThisRun = true;
-        console.log(`\n  ${yellow(marks.warn)} Elysium is working — "${t === "/quit" ? "/quit" : "input"}" queued; Esc cancels the run.\n`);
+        console.log(
+          `\n  ${yellow(marks.warn)} Elysium is working — "${t === "/quit" ? "/quit" : "input"}" queued; Esc cancels the run.\n`,
+        );
       }
-      lineQueue = lineQueue.then(() => handleReplLine(raw, { state, registry, stats, setAgent: (a) => { agent = a; }, getAgent: () => agent, setWorking: (w) => { working = w; } }))
+      lineQueue = lineQueue
+        .then(() =>
+          handleReplLine(raw, {
+            state,
+            registry,
+            stats,
+            setAgent: (a) => {
+              agent = a;
+            },
+            getAgent: () => agent,
+            setWorking: (w) => {
+              working = w;
+            },
+          }),
+        )
         .catch(() => undefined);
       return;
     }
     working = true;
     lineQueue = lineQueue
-      .then(() => handleReplLine(raw, { state, registry, stats, setAgent: (a) => { agent = a; }, getAgent: () => agent, setWorking: (w) => { working = w; } }))
+      .then(() =>
+        handleReplLine(raw, {
+          state,
+          registry,
+          stats,
+          setAgent: (a) => {
+            agent = a;
+          },
+          getAgent: () => agent,
+          setWorking: (w) => {
+            working = w;
+          },
+        }),
+      )
       .catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg === "readline was closed") return; // stdin EOF race after last line: benign
@@ -766,9 +889,7 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   // stdin EOF (piped input or Ctrl+D): wait for the line queue to settle —
   // an in-flight agent run must finish and print before the process exits.
   rl.on("close", () => {
-    lineQueue
-      .then(() => process.exit(0))
-      .catch(() => process.exit(0));
+    lineQueue.then(() => process.exit(0)).catch(() => process.exit(0));
   });
 
   // ── Ctrl+C (SIGINT) seam: abort generation, not the process ──────
@@ -785,8 +906,12 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   let lastCtrlC = 0; // ms timestamp of previous SIGINT, for the 3s window
   const DOUBLE_EXIT_WINDOW_MS = 3_000;
 
-  const onRunStart = (a: Agent): void => { inFlight = a; };
-  const onRunEnd = (): void => { inFlight = null; };
+  const onRunStart = (a: Agent): void => {
+    inFlight = a;
+  };
+  const onRunEnd = (): void => {
+    inFlight = null;
+  };
 
   const handleSigint = (): void => {
     const now = Date.now();
@@ -815,24 +940,31 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   readline.emitKeypressEvents(process.stdin, rl);
   if (process.stdin.isTTY) process.stdin.setRawMode(true);
   let lastEsc = 0;
-  process.stdin.on("keypress", (_ch: string, key: { name?: string; ctrl?: boolean } | undefined) => {
-    if (!key || key.name !== "escape") return;
-    const now = Date.now();
-    const running = inFlight;
-    if (running !== null) {
-      running.abort();
-      inFlight = null;
-      console.log(`\n  ${yellow(marks.warn)} Generation cancelled (Esc) — back at the prompt.`);
-      rl.prompt();
-      return;
-    }
-    // Idle: double-Esc within 3s exits (mirrors double-Ctrl+C).
-    if (lastEsc > 0 && now - lastEsc < 3_000) process.exit(0);
-    lastEsc = now;
-  });
+  process.stdin.on(
+    "keypress",
+    (_ch: string, key: { name?: string; ctrl?: boolean } | undefined) => {
+      if (!key || key.name !== "escape") return;
+      const now = Date.now();
+      const running = inFlight;
+      if (running !== null) {
+        running.abort();
+        inFlight = null;
+        console.log(`\n  ${yellow(marks.warn)} Generation cancelled (Esc) — back at the prompt.`);
+        rl.prompt();
+        return;
+      }
+      // Idle: double-Esc within 3s exits (mirrors double-Ctrl+C).
+      if (lastEsc > 0 && now - lastEsc < 3_000) process.exit(0);
+      lastEsc = now;
+    },
+  );
 
-  // Open the seam to the agent-turn path without a global.
-  (globalThis as { __elysiumRunSeam?: { start(a: Agent): void; end(): void } }).__elysiumRunSeam = {
+  // Open the seam to the agent-turn path without a global. The start()
+  // parameter is structural: anything abortable (Agent, AbortController
+  // wrapper, swarm controller) satisfies it — no Agent import needed here.
+  (
+    globalThis as { __elysiumRunSeam?: { start(a: { abort(): void }): void; end(): void } }
+  ).__elysiumRunSeam = {
     start: onRunStart,
     end: onRunEnd,
   };
@@ -854,18 +986,30 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
     console.log("\n  " + dim("session ended.") + "\n");
     process.exit(0);
   }
-  if (line === "/clear") { console.clear(); return; }
+  if (line === "/clear") {
+    console.clear();
+    return;
+  }
 
   // ── Command error boundary: recoverable errors keep the REPL alive ──
   if (line.startsWith("/")) {
     try {
-      await dispatchCommand(line, xo.state, xo.registry, (nextConfig) => {
-        xo.setAgent(wireAgentFor(nextConfig, xo.registry));
-      }, { stats: xo.stats, setAgent: xo.setAgent, committed: () => xo.state.committed });
+      await dispatchCommand(
+        line,
+        xo.state,
+        xo.registry,
+        (nextConfig) => {
+          xo.setAgent(wireAgentFor(nextConfig, xo.registry));
+        },
+        { stats: xo.stats, setAgent: xo.setAgent, committed: () => xo.state.committed },
+      );
     } catch (err: unknown) {
       if (err instanceof RecoverableCliError) {
         emitCliError("recoverable_command_error", `${err.name}: ${err.message}`);
-        renderRecoverableError(`${err.message} (provider stays: ${xo.state.committed.provider})`, err.action);
+        renderRecoverableError(
+          `${err.message} (provider stays: ${xo.state.committed.provider})`,
+          err.action,
+        );
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         emitCliError("internal_command_error", msg);
@@ -883,7 +1027,9 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
     xo.stats.prompts.push(line);
     // Mark in-flight so SIGINT/Esc can abort exactly this run through the
     // Agent.abort() seam (a per-run AbortController inside the core loop).
-    const seam = (globalThis as { __elysiumRunSeam?: { start(a: Agent): void; end(): void } }).__elysiumRunSeam;
+    const seam = (
+      globalThis as { __elysiumRunSeam?: { start(a: { abort(): void }): void; end(): void } }
+    ).__elysiumRunSeam;
     seam?.start(agent);
     xo.setWorking(true);
     const sp = thinkingSpinner();
@@ -926,9 +1072,10 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
       xo.stats.turns += result.turns;
       const lastA = [...result.messages].reverse().find((m) => m.role === "assistant");
       xo.stats.transcript.push({ role: "user", text: line });
-      if (lastA && lastA.role === "assistant") xo.stats.transcript.push({ role: "assistant", text: lastA.text });
+      if (lastA && lastA.role === "assistant")
+        xo.stats.transcript.push({ role: "assistant", text: lastA.text });
     }
-    
+
     // Closing summary line: turn count, token totals, tokens/sec (output
     // tokens over wall-clock seconds, 1 decimal), wall time. Aborted runs
     // are flagged so partial output is never mistaken for a full answer.
@@ -937,15 +1084,28 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
     const tokensPerSec = dt > 0 ? (result.usage.outputTokens / (dt / 1000)).toFixed(1) : "—";
     const seconds = (dt / 1000).toFixed(1);
     const abortedSuffix = result.stopReason === "aborted" ? " | aborted" : "";
-        const secs = dt / 1000;
+    const secs = dt / 1000;
     const tps = secs > 0 ? (result.usage.outputTokens / secs).toFixed(1) : "-";
     const totalTokens = result.usage.inputTokens + result.usage.outputTokens;
-    console.log(`  ${dim(`─ ${totalTokens} tok · ${tps} tok/s · ${(dt / 1000).toFixed(1)}s${result.stopReason === "aborted" ? " · aborted" : ""}`)}`);
+    console.log(
+      `  ${dim(`─ ${totalTokens} tok · ${tps} tok/s · ${(dt / 1000).toFixed(1)}s${result.stopReason === "aborted" ? " · aborted" : ""}`)}`,
+    );
   } catch (err: unknown) {
     if (err instanceof RecoverableCliError) {
       renderRecoverableError(err.message, err.action);
     } else {
       const msg = err instanceof Error ? err.message : String(err);
+      // A turn-budget exhaustion is a user-facing effort-dial condition, not
+      // a provider/network failure: render it with its own remedy instead of
+      // the generic provider error translation.
+      if (msg.includes("max turns exceeded")) {
+        emitCliError("max_turns_exceeded", msg);
+        renderRecoverableError(
+          "Limite turni raggiunto (mode: " + currentMode + ")",
+          "Alza con /mode high|max o spezza il task",
+        );
+        return;
+      }
       emitCliError("agent_run_error", msg);
       // Friendly translation for provider/network failures.
       const t = translateProviderError(err);
@@ -977,9 +1137,12 @@ async function runSingleTask(config: ProviderConfig, task: string): Promise<void
   const dt = Date.now() - t0;
   for (const m of result.messages) {
     if (m.role === "assistant" && m.text) console.log(`\n${m.text}`);
-    else if (m.role === "tool_result") console.log(`  → [${m.toolName}] ${m.isError ? "✗ " : ""}${m.content.slice(0, 200)}`);
+    else if (m.role === "tool_result")
+      console.log(`  → [${m.toolName}] ${m.isError ? "✗ " : ""}${m.content.slice(0, 200)}`);
   }
-  console.log(`\n─── ${result.turns} turns, ${result.usage.inputTokens}+${result.usage.outputTokens} tokens, ${dt}ms ───`);
+  console.log(
+    `\n─── ${result.turns} turns, ${result.usage.inputTokens}+${result.usage.outputTokens} tokens, ${dt}ms ───`,
+  );
 }
 
 function createToolRegistry(): ToolRegistry {
@@ -1036,10 +1199,21 @@ async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   let taskArg: string | null = null;
   let providerArg: string | null = null;
-  if (argv.includes("--help") || argv.includes("-h")) { showHelp(); return; }
+  if (argv.includes("--help") || argv.includes("-h")) {
+    showHelp();
+    return;
+  }
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--task" && argv[i + 1]) { taskArg = argv[i + 1] ?? null; i += 1; continue; }
-    if (argv[i] === "--provider" && argv[i + 1]) { providerArg = argv[i + 1] ?? null; i += 1; continue; }
+    if (argv[i] === "--task" && argv[i + 1]) {
+      taskArg = argv[i + 1] ?? null;
+      i += 1;
+      continue;
+    }
+    if (argv[i] === "--provider" && argv[i + 1]) {
+      providerArg = argv[i + 1] ?? null;
+      i += 1;
+      continue;
+    }
     if (argv[i] !== undefined && !argv[i]!.startsWith("-")) taskArg = argv[i]!;
   }
   let config = loadConfig(PROJECT_ROOT);
