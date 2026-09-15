@@ -19,11 +19,11 @@ const COLORS_ENABLED =
   process.env.TERM !== "dumb" &&
   process.stdout.isTTY === true;
 
-/** Selectable UI theme: 'fire' (brand palette) or 'mono' (brand → plain). */
-export type Theme = "fire" | "mono";
+/** Selectable UI theme: 'matrix' (brand palette) or 'mono' (brand → plain). */
+export type Theme = "matrix" | "mono";
 
-/** Module-level theme state; default 'fire'. */
-let activeTheme: Theme = "fire";
+/** Module-level theme state; default 'matrix'. */
+let activeTheme: Theme = "matrix";
 
 /**
  * Switch the UI theme. In 'mono' the BRAND colorizers render plain text;
@@ -66,17 +66,17 @@ export const magenta = colorize("35", "39", true);
 export const white = colorize("97", "39");
 export const blue = colorize("94", "39", true);
 
-// ── Fire palette (256-color brand accents — "rosso fuoco") ──
-// flame/amber/ember/fire/dRed go bright→deep; used for brand moments
+// ── Matrix palette (256-color brand accents — verde neon su nero) ──
+// neon/lime/moss/pine/dGreen go bright→deep; used for brand moments
 // (wordmark, section titles, prompt, pane headers). Semantic status colors
 // (green/yellow/red) stay untouched for pass/warn/fail meaning.
-export const fire = colorize("38;5;196", "39", true);
-export const ember = colorize("38;5;202", "39", true);
-export const amber = colorize("38;5;208", "39", true);
-export const flame = colorize("38;5;214", "39", true);
-export const dRed = colorize("38;5;88", "39", true);
+export const neon = colorize("38;5;46", "39", true);
+export const lime = colorize("38;5;40", "39", true);
+export const moss = colorize("38;5;34", "39", true);
+export const pine = colorize("38;5;28", "39", true);
+export const dGreen = colorize("38;5;22", "39", true);
 
-/** Shadow-font glyphs (verified spelling) used by {@link fireWordmark}. */
+/** Shadow-font glyphs (verified spelling) used by {@link renderWordmark}. */
 const SHADOW_LETTERS: Record<string, readonly string[]> = {
   E: ["███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "███████╗", "╚══════╝"],
   L: ["██╗     ", "██║     ", "██║     ", "██║     ", "███████╗", "╚══════╝"],
@@ -86,20 +86,20 @@ const SHADOW_LETTERS: Record<string, readonly string[]> = {
   U: ["██╗   ██╗", "██║   ██║", "██║   ██║", "██║   ██║", "╚██████╔╝", " ╚═════╝ "],
   M: ["███╗   ███╗", "████╗ ████║", "██╔████╔██║", "██║╚██╔╝██║", "██║ ╚═╝ ██║", "╚═╝     ╚═╝"],
 };
-const FIRE_MARK_COLORS: readonly Colorize[] = [flame, amber, ember, fire, fire, dRed];
+const WORDMARK_COLORS: readonly Colorize[] = [neon, lime, moss, pine, pine, dGreen];
 
-/** Renders `text` as ANSI-shadow rows with the fire gradient. */
-export function fireWordmark(text: string): string[] {
+/** Renders `text` as ANSI-shadow rows with the matrix gradient. */
+function renderWordmark(text: string): string[] {
   const rows = ["", "", "", "", "", ""];
   for (const ch of text.toUpperCase()) {
     const glyph = SHADOW_LETTERS[ch];
     if (glyph === undefined) continue;
     for (let i = 0; i < 6; i += 1) rows[i] += `${glyph[i] ?? ""} `;
   }
-  return rows.map((r, i) => FIRE_MARK_COLORS[i]?.(r.trimEnd()) ?? r);
+  return rows.map((r, i) => WORDMARK_COLORS[i]?.(r.trimEnd()) ?? r);
 }
 
-/** Orbit emblem: burning core + orbit ring + satellites (brand motif of the thinking spinner). */
+/** Orbit emblem: glowing core + orbit ring + satellites (brand motif of the thinking spinner). */
 const ORBIT_ART_ROWS: readonly string[] = [
   "   ╭───╮   ",
   " ╭─┤ █ ├─╮ ",
@@ -108,7 +108,7 @@ const ORBIT_ART_ROWS: readonly string[] = [
   " ╰─┤   ├─╯ ",
   "   ╰───╯   ",
 ];
-const ORBIT_ART_COLORS: readonly Colorize[] = [flame, amber, ember, fire, ember, dRed];
+const ORBIT_ART_COLORS: readonly Colorize[] = [neon, lime, moss, pine, moss, dGreen];
 
 /** Typographic status markers — no emoji, greppable, color-independent. */
 export const marks = {
@@ -154,10 +154,10 @@ export function kv(label: string, value: string): string {
 }
 
 /**
- * Section header: uppercase label over a rule. Brand-colored (amber).
+ * Section header: uppercase label over a rule. Brand-colored (neon).
  */
 export function section(title: string): string {
-  return `\n  ${bold(amber(title.toUpperCase()))}\n  ${dim("─".repeat(Math.max(24, title.length + 2)))}`;
+  return `\n  ${bold(neon(title.toUpperCase()))}\n  ${dim("─".repeat(Math.max(24, title.length + 2)))}`;
 }
 
 /** Info shown on the welcome screen. */
@@ -173,7 +173,7 @@ export interface WelcomeInfo {
 }
 
 /**
- * Full welcome screen (TTY): fire-gradient wordmark + structured box —
+ * Full welcome screen (TTY): matrix-gradient wordmark + structured box —
  * torch emblem and model/session on the left, Tools/Skills columns on the
  * right, count footer. Non-TTY: compact plain block (deterministic pipes).
  */
@@ -196,10 +196,10 @@ export function welcomeScreen(info: WelcomeInfo): string {
 
   // Right column lines.
   const right: string[] = [];
-  right.push(`${bold(flame("Tools"))}`);
+  right.push(`${bold(lime("Tools"))}`);
   right.push(`  ${white(info.tools.join(" · "))}`);
   right.push("");
-  right.push(`${bold(flame("Skills"))}`);
+  right.push(`${bold(lime("Skills"))}`);
   const shown: string[] = [];
   let used = 0;
   for (const s of info.skills) {
@@ -231,10 +231,10 @@ export function welcomeScreen(info: WelcomeInfo): string {
     const rp = padRight(r, rightW);
     return `${dim("│")}${lp}${dim(" │ ")}${rp}${dim("│")}`;
   };
-  const topTitle = `╭─ ${bold(flame(`Elysium Harness v${info.version}`))} `;
+  const topTitle = `╭─ ${bold(lime(`Elysium Harness v${info.version}`))} `;
   const topRest = Math.max(0, inner + 2 - stripAnsi(topTitle).length);
   return [
-    ...fireWordmark("ELYSIUM"),
+    ...renderWordmark("ELYSIUM"),
     "",
     `${topTitle}${dim("─".repeat(topRest))}╮`,
     ...Array.from({ length: rowLines }, (_, i) => row(leftAll[i] ?? "", right[i] ?? "")),
@@ -243,7 +243,7 @@ export function welcomeScreen(info: WelcomeInfo): string {
 }
 
 /**
- * One-line inverted status strip (dark-red bg, flame fg). Non-TTY: empty.
+ * One-line inverted status strip (dark-green bg, neon fg). Non-TTY: empty.
  * Call again (e.g. after /status or a turn) to print a refreshed one.
  */
 export function statusBar(info: {
@@ -257,7 +257,7 @@ export function statusBar(info: {
   const text = `  ◆ ${info.model} · ${info.mode} · ${info.tokens} tok · ${info.turns} turns · /help `;
   const visible = stripAnsi(text).length;
   const pad = " ".repeat(Math.max(0, termW - visible));
-  return `\u001B[48;5;52m\u001B[38;5;214m${text}${pad}\u001B[0m`;
+  return `\u001B[48;5;22m\u001B[38;5;46m${text}${pad}\u001B[0m`;
 }
 
 function truncatePlain(s: string, w: number): string {
@@ -461,7 +461,7 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
   },
   {
     name: "/theme",
-    signature: "/theme [fire|mono]",
+    signature: "/theme [matrix|mono]",
     description: "Palette della CLI",
     group: "REPL",
     maturity: "stable",
@@ -483,23 +483,23 @@ export function helpScreen(query: string): string {
   const lines: string[] = [];
   const stable = HELP_CATALOG.filter((e) => e.maturity !== "planned" && match(e));
   const planned = HELP_CATALOG.filter((e) => e.maturity === "planned" && match(e));
-  lines.push(q.length > 0 ? `\n  ${amber(`help — filtro: "${q}"`)}` : `\n  ${amber("COMANDI")}`);
+  lines.push(q.length > 0 ? `\n  ${neon(`help — filtro: "${q}"`)}` : `\n  ${neon("COMANDI")}`);
   if (stable.length === 0 && planned.length === 0) {
     lines.push(`  ${dim("nessun comando matcha — prova un'altra parola")}`);
     return lines.join("\n");
   }
   const groups = [...new Set(stable.map((e) => e.group))];
   for (const g of groups) {
-    lines.push(`\n  ${bold(flame(g))}`);
+    lines.push(`\n  ${bold(lime(g))}`);
     for (const e of stable.filter((x) => x.group === g)) {
       const args = e.signature.startsWith(e.name)
         ? e.signature.slice(e.name.length).trim()
         : e.signature;
-      lines.push(`    ${fire(e.name.padEnd(12))} ${dim(args.padEnd(26))}${e.description}`);
+      lines.push(`    ${neon(e.name.padEnd(12))} ${dim(args.padEnd(26))}${e.description}`);
     }
   }
   if (planned.length > 0) {
-    lines.push(`\n  ${bold(amber("IN ARRIVO"))}  ${dim("survey in corso — quale vuoi prima?")}`);
+    lines.push(`\n  ${bold(neon("IN ARRIVO"))}  ${dim("survey in corso — quale vuoi prima?")}`);
     for (const e of planned) {
       const args = e.signature.startsWith(e.name)
         ? e.signature.slice(e.name.length).trim()

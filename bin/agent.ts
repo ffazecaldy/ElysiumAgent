@@ -76,7 +76,7 @@ import {
   thinkingSpinner,
   magenta,
   translateProviderError,
-  fire,
+  neon,
   welcomeScreen,
   statusBar,
   helpScreen,
@@ -622,7 +622,7 @@ async function dispatchCommand(
         `  ${dim(`source: ${plan.source} · ${plan.subtasks.length} subtask — esegui con /swarm <goal>`)}`,
       );
       for (const t of plan.subtasks) {
-        console.log(`  ${fire(t.id.padEnd(8))} ${t.goal}`);
+        console.log(`  ${neon(t.id.padEnd(8))} ${t.goal}`);
         for (const c of t.acceptanceCriteria) console.log(`        ${dim(`- ${c}`)}`);
       }
       console.log();
@@ -787,14 +787,14 @@ async function dispatchCommand(
   let currentThemeMode = currentTheme();
   if (input === "/theme" || input.startsWith("/theme ")) {
     const arg = input.slice(6).trim();
-    if (arg === "mono" || arg === "fire") {
+    if (arg === "mono" || arg === "matrix") {
       setTheme(arg);
       currentThemeMode = arg;
       console.log(`\n  ${marks.ok} Theme: ${arg}${arg === "mono" ? " (brand accents off)" : ""}\n`);
       return;
     }
     console.log(
-      `\n  Theme: ${currentThemeMode}  ${dim("· switch with /theme fire | /theme mono")}\n`,
+      `\n  Theme: ${currentThemeMode}  ${dim("· switch with /theme matrix | /theme mono")}\n`,
     );
     return;
   }
@@ -1062,7 +1062,7 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: `${fire("❯")} `,
+    prompt: `${neon("❯")} `,
     historySize: 100,
     // Tab completion over the command catalog: prefixes match, empty prefix
     // offers the full list (readline shows it above the prompt).

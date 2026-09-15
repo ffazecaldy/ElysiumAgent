@@ -1,5 +1,5 @@
 /**
- * Tests for the dynamic help screen and the switchable fire/mono theme.
+ * Tests for the dynamic help screen and the switchable matrix/mono theme.
  * Run in non-TTY (vitest) so output is plain and deterministic; the theme
  * switch must therefore never crash and must restore correctly.
  */
@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { currentTheme, helpScreen, setTheme } from "../src/ui";
 
 afterEach(() => {
-  setTheme("fire"); // restore default for other test files
+  setTheme("matrix"); // restore default for other test files
 });
 
 describe("helpScreen", () => {
@@ -30,13 +30,13 @@ describe("helpScreen", () => {
 });
 
 describe("theme switching", () => {
-  it("defaults to fire", () => {
-    setTheme("fire");
-    expect(currentTheme()).toBe("fire");
+  it("defaults to matrix", () => {
+    setTheme("matrix");
+    expect(currentTheme()).toBe("matrix");
   });
 
   it("switches to mono and back without crashing, brand text stays sane", () => {
-    expect(currentTheme()).toBe("fire");
+    expect(currentTheme()).toBe("matrix");
     setTheme("mono");
     expect(currentTheme()).toBe("mono");
     // Brand colorizers become identity in mono: strings stay readable.
@@ -46,8 +46,8 @@ describe("theme switching", () => {
     const filtered = helpScreen("cost");
     expect(filtered).toContain("/cost");
     expect(filtered).toContain("Sessione");
-    setTheme("fire");
-    expect(currentTheme()).toBe("fire");
+    setTheme("matrix");
+    expect(currentTheme()).toBe("matrix");
     expect(helpScreen("")).toContain("/swarm");
   });
 });
