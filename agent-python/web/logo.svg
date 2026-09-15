@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="Elysium Agent">
+  <defs>
+    <radialGradient id="halo" cx="0.5" cy="0.45" r="0.68">
+      <stop offset="0" stop-color="#bf8dff" stop-opacity="0.42"/>
+      <stop offset="0.5" stop-color="#bf8dff" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#bf8dff" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="clip">
+      <rect x="28" y="28" width="200" height="200" rx="40"/>
+    </clipPath>
+    <filter id="glow" x="-60%" y="-60%" width="220%" height="220%">
+      <feGaussianBlur stdDeviation="6" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <!-- rounded square dark di sfondo -->
+  <rect width="256" height="256" rx="48" fill="#0a0a0a"/>
+  <rect x="1.5" y="1.5" width="253" height="253" rx="46.5" fill="none" stroke="#262626" stroke-width="3"/>
+
+  <!-- glow lilla (firma clears) -->
+  <circle cx="128" cy="128" r="118" fill="url(#halo)"/>
+
+  <!-- tile interno scuro con bordo lilla -->
+  <rect x="28" y="28" width="200" height="200" rx="40" fill="#101010"/>
+  <rect x="28" y="28" width="200" height="200" rx="40" fill="none" stroke="#bf8dff" stroke-opacity="0.32" stroke-width="2"/>
+
+  <!-- highlight superiore (effetto vetro) -->
+  <g clip-path="url(#clip)">
+    <rect x="28" y="28" width="200" height="84" fill="#ffffff" fill-opacity="0.05"/>
+  </g>
+
+  <!-- fulmine stilizzato lilla con glow -->
+  <path d="M142 44 L90 142 H127 L113 212 L168 100 H131 Z" fill="#caa2ff" filter="url(#glow)"/>
+</svg>

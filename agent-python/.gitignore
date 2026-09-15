@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.sandbox/
+results/
+.pytest_cache/
+projects/
+*.log
+node_modules/
+.env

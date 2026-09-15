@@ -39,3 +39,21 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  python-tests:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: pip install -r agent-python/requirements.txt
+
+      - name: Pytest
+        run: python -m pytest agent-python/tests -q -c agent-python/pytest.ini

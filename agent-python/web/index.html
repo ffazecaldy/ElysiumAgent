@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="it" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Elysium Agent</title>
+  <meta name="description" content="Harness multi-agente Elysium — progetti, chat, loop e run.">
+  <meta name="theme-color" content="#ffffff">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="logo.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <!-- ordine vincolante: app.js DEVE definire app() prima del CDN Alpine,
+       che si avvia su microtask appena eseguito (nessun wait DOMContentLoaded) -->
+  <script defer src="app.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body x-data="app()" x-init="init()">
+  <a href="#main" class="skip-link">Salta al contenuto</a>
+
+  <!-- header con glow -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <button class="btn icon-only hamburger" @click="toggleSidebar"
+              aria-controls="sidebar" :aria-expanded="sidebarOpen ? 'true' : 'false'"
+              aria-label="Apri o chiudi il pannello laterale">☰</button>
+      <div class="brand">
+        <span class="logo-pulse" aria-hidden="true">⚡</span>
+        <h1>Elysium <span class="accent">Agent</span></h1>
+      </div>
+      <span class="tag" :class="{on: connected}"
+            :aria-label="connected ? 'Server online' : 'Server offline'"
+            x-text="connected ? '● online' : '○ offline'"></span>
+    </div>
+    <nav aria-label="Vista principale">
+      <button class="btn ghost icon-only" @click="toggleTheme" :aria-label="'Passa a tema ' + (theme==='dark' ? 'chiaro' : 'scuro')"
+              :title="theme==='dark' ? 'Tema chiaro' : 'Tema scuro'">
+        <span x-text="theme==='dark' ? '☀' : '☾'" aria-hidden="true"></span>
+      </button>
+      <button class="btn ghost" @click="openChat" :class="{active: view==='chat'}"
+              :aria-current="view==='chat' ? 'true' : undefined" aria-label="Vai alla chat">Chat</button>
+      <button class="btn ghost" @click="openRuns" :class="{active: view==='runs'}"
+              :aria-current="view==='runs' ? 'true' : undefined" aria-label="Vai alle run del progetto">Run</button>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <!-- sidebar: progetti + file del progetto corrente -->
+    <aside class="sidebar" id="sidebar" aria-label="Pannello laterale" :class="{open: sidebarOpen}">
+      <div class="sidebar-block">
+        <div class="sidebar-head">
+          <span class="eyebrow">Progetti</span>
+          <div class="head-actions">
+            <button class="btn icon-only mini" @click="openAttach" title="Collega una cartella esistente"
+                    aria-label="Collega una cartella esistente">📁</button>
+            <button class="btn icon-only mini" @click="openNewProject" aria-label="Crea un nuovo progetto">+</button>
+          </div>
+        </div>
+
+        <div class="loading" x-show="loadingProjects" role="status" aria-live="polite">
+          <div class="spinner" aria-hidden="true"></div><span>caricamento…</span>
+        </div>
+
+        <ul class="proj-list" x-show="!loadingProjects">
+          <template x-for="p in projects" :key="p.id">
+            <li class="proj-item" :class="{active: p.id===current?.id}"
+                :aria-current="p.id===current?.id ? 'true' : undefined"
+                @click="switchProject(p.id)" role="button" tabindex="0"
+                :aria-label="'Apri progetto ' + p.name"
+                @keydown.enter="switchProject(p.id)">
+              <span class="proj-dot" aria-hidden="true"></span>
+              <span class="proj-name" x-text="p.name" :title="p.name"></span>
+              <span class="proj-link" x-show="p.attached" title="Cartella collegata" aria-label="cartella collegata">🔗</span>
+              <span class="proj-count muted" x-text="p.files_count"></span>
+            </li>
+          </template>
+        </ul>
+
+        <p class="empty small" x-show="!loadingProjects && projects.length===0">
+          Nessun progetto. <button class="btn mini" @click="openNewProject">Crealo</button>
+        </p>
+      </div>
+
+      <!-- FILE del progetto corrente -->
+      <div class="sidebar-block files-block">
+        <div class="sidebar-head">
+          <span class="eyebrow">File</span>
+          <div class="head-actions">
+            <span class="muted count" x-show="current" x-text="current ? current.files.length : 0"></span>
+            <button class="btn icon-only mini" @click="refreshProject()" :disabled="!current"
+                    aria-label="Aggiorna i file del progetto">⟳</button>
+          </div>
+        </div>
+
+        <template x-if="current">
+          <div>
+            <p class="empty small" x-show="sortedFiles.length===0">Nessun file nel workspace.</p>
+            <ul class="file-list" x-show="sortedFiles.length">
+              <template x-for="f in sortedFiles" :key="f.path">
+                <li class="file-item" @click="openFile(f.path)" role="button" tabindex="0"
+                    :aria-label="'Apri ' + f.path" @keydown.enter="openFile(f.path)"
+                    :title="f.path + ' · ' + fmtBytes(f.bytes)">
+                  <span class="file-ext" aria-hidden="true" x-text="fileExt(f.path)"></span>
+                  <span class="file-path" x-text="f.path"></span>
+                  <span class="file-bytes muted" x-text="fmtBytes(f.bytes)"></span>
+                </li>
+              </template>
+            </ul>
+          </div>
+        </template>
+        <p class="empty small" x-show="!current">Seleziona un progetto per vedere i suoi file.</p>
+      </div>
+    </aside>
+
+    <!-- backdrop per la sidebar su mobile -->
+    <div class="sidebar-backdrop" x-show="sidebarOpen" x-cloak x-transition.opacity.duration.200ms
+         @click="sidebarOpen=false" @keydown.escape.window="sidebarOpen=false" aria-hidden="true"></div>
+
+    <!-- area principale -->
+    <main id="main" class="main-area" tabindex="-1">
+      <!-- ── VISTA CHAT ─────────────────────────────────────── -->
+      <section class="chat-area" x-show="view==='chat'" x-cloak x-transition.opacity.duration.200ms>
+        <h2 class="sr-only">Chat con Elysium</h2>
+        <template x-if="current">
+          <div class="panel">
+            <div class="chat-head">
+              <strong x-text="current.name"></strong>
+              <span class="muted" x-text="(current.files ? current.files.length : 0) + ' file · ' + (current.runs ? current.runs.length : 0) + ' run'"></span>
+            </div>
+
+            <div class="messages" id="messages" x-ref="messages" aria-live="polite"
+                 :aria-busy="busy ? 'true' : 'false'">
+              <template x-for="(m, i) in messages" :key="m._key || i">
+                <div class="msg" :class="m.role">
+                  <div class="bubble">
+                    <span class="who" x-text="m.role==='user' ? 'tu' : 'elysium'"></span>
+                    <div class="md" x-html="renderMd(m.content)"></div>
+                  </div>
+                  <template x-if="m.meta && m.meta.run_report">
+                    <div class="report-card">
+                      <span class="rep-status" :class="statusClass(m.meta.run_report.final_status)"
+                            x-text="statusLabel(m.meta.run_report.final_status)"></span>
+                      <span>first-pass <strong x-text="pct(m.meta.run_report.first_pass_rate)"></strong></span>
+                      <span>qualità <strong x-text="m.meta.run_report.avg_quality != null ? m.meta.run_report.avg_quality + '/10' : '—'"></strong></span>
+                      <span>task <strong x-text="m.meta.run_report.n_passed + '/' + m.meta.run_report.n_tasks"></strong></span>
+                      <span>token <strong x-text="smart(m.meta.run_report.tokens_estimate)"></strong></span>
+                    </div>
+                  </template>
+                </div>
+              </template>
+
+              <!-- stato: stream in diretta / loop Elysium / attesa -->
+              <div class="msg assistant" x-show="busy" x-transition.opacity.duration.150ms aria-live="off">
+                <div class="bubble">
+                  <span class="who">elysium</span>
+                  <template x-if="loopActive">
+                    <div class="busy-loop">
+                      <span class="cursor">loop Elysium attivo <span class="tier" x-text="'(tier ' + loopTier + ')'"></span>…</span>
+                      <div class="loop-bar" role="progressbar" aria-label="Loop Elysium in esecuzione" aria-valuetext="in corso">
+                        <div class="loop-bar-fill" aria-hidden="true"></div>
+                      </div>
+                      <template x-if="liveReport">
+                        <div class="report-card live" aria-label="Riepilogo loop appena concluso">
+                          <span class="rep-status" :class="statusClass(liveReport.final_status)"
+                                x-text="statusLabel(liveReport.final_status)"></span>
+                          <span>first-pass <strong x-text="pct(liveReport.first_pass_rate)"></strong></span>
+                          <span>task <strong x-text="liveReport.n_passed != null ? liveReport.n_passed + '/' + liveReport.n_tasks : liveReport.n_tasks"></strong></span>
+                        </div>
+                      </template>
+                    </div>
+                  </template>
+                  <template x-else-if="streamText">
+                    <div class="md" x-html="renderMd(streamText)"></div>
+                  </template>
+                  <template x-else>
+                    <span class="caret" aria-hidden="true">▍</span>
+                  </template>
+                </div>
+              </div>
+            </div>
+
+            <!-- input -->
+            <form class="composer" @submit.prevent="send">
+              <textarea x-model="draft" rows="1" :disabled="busy"
+                placeholder="Obiettivo o goal per il progetto… (tier 2+ attiva il loop Elysium)"
+                @keydown.enter.prevent="send" aria-label="Messaggio per Elysium"></textarea>
+              <button class="btn primary send-btn" type="submit" :disabled="busy || !draft.trim()"
+                      aria-label="Invia messaggio">
+                <span x-show="!busy" aria-hidden="true">▶</span>
+                <span x-show="busy" class="spinner sm" aria-hidden="true"></span>
+              </button>
+            </form>
+
+            <div class="error" x-show="error" x-text="error" role="alert"></div>
+          </div>
+        </template>
+
+        <template x-if="!current">
+          <div class="empty hero">
+            <div class="hero-logo" aria-hidden="true">⚡</div>
+            <h2>Benvenuto in Elysium Agent</h2>
+            <p>Un ambiente di lavoro con la tua AI: crea un progetto, chatta, e per goal complessi
+               attiva il loop multi-agente (decompose → scatter → quality gate → retry).</p>
+            <button class="btn primary" @click="openNewProject">+ Crea il primo progetto</button>
+          </div>
+        </template>
+      </section>
+
+      <!-- ── VISTA RUN ──────────────────────────────────────── -->
+      <section class="runs-area" x-show="view==='runs'" x-cloak x-transition.opacity.duration.200ms>
+        <div class="runs-head">
+          <div>
+            <h2>Run Elysium</h2>
+            <p class="muted" x-text="current ? runs.length + (runs.length===1 ? ' esecuzione' : ' esecuzioni') : 'nessun progetto selezionato'"></p>
+          </div>
+          <button class="btn icon-only mini" @click="loadRuns" :disabled="runsLoading || !current"
+                  aria-label="Aggiorna elenco run">⟳</button>
+        </div>
+
+        <div class="loading" x-show="runsLoading" role="status" aria-live="polite">
+          <div class="spinner" aria-hidden="true"></div><span>caricamento run…</span>
+        </div>
+
+        <template x-if="!current && !runsLoading">
+          <p class="empty card">
+            <span class="empty-ico" aria-hidden="true">🛰️</span>
+            Seleziona un progetto per vedere le sue run.
+            <button class="btn mini" @click="toggleSidebar">Apri progetti</button>
+          </p>
+        </template>
+
+        <template x-if="current">
+          <p class="empty card" x-show="!runsLoading && runs.length===0">
+            <span class="empty-ico" aria-hidden="true">🛰️</span>
+            Nessuna run ancora. Invia un goal complesso (tier 2+) dalla chat per attivare il loop Elysium.
+            <button class="btn mini" @click="openChat">Vai alla chat</button>
+          </p>
+        </template>
+
+        <div class="runs-grid" x-show="!runsLoading && runs.length">
+          <template x-for="run in runs" :key="run.id">
+            <article class="run-card" :class="{open: expandedRun===run.id}"
+                     @click="expandRun(run)" role="button" tabindex="0"
+                     :aria-expanded="expandedRun===run.id ? 'true' : 'false'"
+                     :aria-label="'Dettaglio run: ' + run.goal"
+                     @keydown.enter="expandRun(run)">
+              <header class="run-card-head">
+                <span class="run-status" :class="runPill(run).cls" x-text="runPill(run).label"></span>
+                <span class="muted" x-text="fmtDate(run.ts)"></span>
+              </header>
+              <h3 class="run-goal" x-text="run.goal"></h3>
+              <div class="run-metrics">
+                <span class="metric"><i>first-pass</i><b x-text="pct(run.first_pass_rate)"></b></span>
+                <span class="metric"><i>qualità</i><b x-text="run.quality != null ? run.quality + '/10' : '—'"></b></span>
+                <span class="metric"><i>task</i><b x-text="run.n_tasks"></b></span>
+              </div>
+
+              <!-- dettaglio espandibile -->
+              <template x-if="expandedRun===run.id">
+                <div class="run-detail">
+                  <div class="loading" x-show="!runDetail" role="status" aria-live="polite">
+                    <div class="spinner sm" aria-hidden="true"></div><span>lettura dettaglio…</span>
+                  </div>
+                  <template x-if="runDetail">
+                    <div class="run-detail-inner">
+                      <div class="detail-metrics">
+                        <span class="metric big"><i>stato</i><b :class="statusClass(runDetail.final_status)" x-text="statusLabel(runDetail.final_status)"></b></span>
+                        <span class="metric big"><i>passati</i><b x-text="(runDetail.n_passed != null ? runDetail.n_passed + '/' + runDetail.n_tasks : '—')"></b></span>
+                        <span class="metric big"><i>tier</i><b x-text="runDetail.tier != null ? 'T' + runDetail.tier : '—'"></b></span>
+                        <span class="metric big"><i>durata</i><b x-text="fmtDur(runDetail.duration_s)"></b></span>
+                        <span class="metric big"><i>token (stima)</i><b x-text="smart(runDetail.tokens_estimate)"></b></span>
+                        <span class="metric big"><i>threshold</i><b x-text="runDetail.threshold != null ? runDetail.threshold + '/10' : '—'"></b></span>
+                      </div>
+
+                      <div class="rd-section" x-show="runDetail.tasks && runDetail.tasks.length">
+                        <h4>Task</h4>
+                        <ul class="task-list">
+                          <template x-for="t in runDetail.tasks" :key="t.task_id">
+                            <li class="task-item" :class="'s-' + (t.status || 'fail')">
+                              <span class="task-dot" aria-hidden="true"></span>
+                              <span class="task-id" x-text="t.task_id"></span>
+                              <span class="task-meta muted"
+                                    x-text="'tentativi ' + (t.attempts || 0) + ' · qualità ' + (t.quality != null ? t.quality + '/10' : '—')"></span>
+                            </li>
+                          </template>
+                        </ul>
+                      </div>
+
+                      <div class="rd-section" x-show="runDetail.files_written && runDetail.files_written.length">
+                        <h4>File scritti</h4>
+                        <ul class="written-list">
+                          <template x-for="f in runDetail.files_written" :key="f.path">
+                            <li class="written-item" @click="openFile(f.path)" role="button" tabindex="0"
+                                :aria-label="'Apri ' + f.path" @keydown.enter="openFile(f.path)" :title="f.path">
+                              <span class="file-ext sm" aria-hidden="true" x-text="fileExt(f.path)"></span>
+                              <span x-text="f.path"></span>
+                            </li>
+                          </template>
+                        </ul>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </template>
+            </article>
+          </template>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- modal nuovo progetto -->
+  <div class="modal-backdrop" x-show="newProjectOpen" x-cloak x-transition.opacity.duration.200ms
+       @click.self="cancelNewProject" @keydown.escape.window="cancelNewProject">
+    <div class="modal" x-ref="modalPanel" @keydown.tab="trapFocus($event, 'modalPanel')"
+         role="dialog" aria-modal="true" aria-labelledby="np-title">
+      <h2 id="np-title" class="modal-title">Nuovo progetto</h2>
+      <form @submit.prevent="confirmNewProject">
+        <label class="sr-only" for="np-name">Nome del progetto</label>
+        <input id="np-name" type="text" x-model="newProjectName" x-ref="npInput"
+               maxlength="60" placeholder="es. refactor-auth" autocomplete="off">
+        <p class="modal-hint">Crea un workspace vuoto: chat, file e run verranno salvati nel progetto.</p>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" @click="cancelNewProject">Annulla</button>
+          <button type="submit" class="btn primary" :disabled="!newProjectName.trim()">Crea progetto</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- modal collega cartella esistente -->
+  <div class="modal-backdrop" x-show="attachOpen" x-cloak x-transition.opacity.duration.200ms
+       @click.self="cancelAttach" @keydown.escape.window="cancelAttach">
+    <div class="modal" x-ref="attachPanel" @keydown.tab="trapFocus($event, 'attachPanel')"
+         role="dialog" aria-modal="true" aria-labelledby="at-title">
+      <h2 id="at-title" class="modal-title">Collega cartella esistente</h2>
+      <form @submit.prevent="confirmAttach">
+        <label for="at-name" class="field-label">Nome progetto</label>
+        <input id="at-name" type="text" x-model="attachName" x-ref="atNameInput"
+               maxlength="60" placeholder="es. il-mio-repo" autocomplete="off">
+        <label for="at-path" class="field-label">Percorso cartella</label>
+        <input id="at-path" type="text" x-model="attachPath"
+               placeholder="es. C:/Users/Admin/Progetti/mio-repo" autocomplete="off">
+        <p class="modal-hint">Il harness lavorerà in-place sulla cartella (leggi/scrivi file), senza toccare chat o storico in quel posto. Usa percorsi assoluti.</p>
+        <div class="error" x-show="attachError" x-text="attachError" role="alert"></div>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" @click="cancelAttach">Annulla</button>
+          <button type="submit" class="btn primary" :disabled="!attachName.trim() || !attachPath.trim() || attachBusy">
+            <span x-show="!attachBusy">Collega</span><span x-show="attachBusy" class="spinner sm"></span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- viewer file: pannello laterale in sola lettura -->
+  <div class="viewer-backdrop" x-show="viewer.open" x-cloak x-transition.opacity.duration.200ms
+       @click.self="closeViewer" @keydown.escape.window="closeViewer">
+    <aside class="file-viewer" x-ref="viewerPanel" @keydown.tab="trapFocus($event, 'viewerPanel')"
+           role="dialog" aria-modal="true" :aria-label="'Anteprima file ' + viewer.path">
+      <header class="viewer-head">
+        <div class="viewer-title">
+          <span class="file-ext" x-show="viewer.path" x-text="fileExt(viewer.path)" aria-hidden="true"></span>
+          <div class="viewer-path">
+            <strong x-text="viewer.path || 'file'"></strong>
+            <span class="muted small" x-show="viewer.bytes" x-text="fmtBytes(viewer.bytes)"></span>
+          </div>
+        </div>
+        <button class="btn icon-only mini" @click="closeViewer" x-ref="viewerClose" aria-label="Chiudi anteprima file">✕</button>
+      </header>
+
+      <div class="viewer-body">
+        <div class="loading" x-show="viewer.loading" role="status" aria-live="polite">
+          <div class="spinner" aria-hidden="true"></div><span>lettura…</span>
+        </div>
+        <div class="error" x-show="viewer.error" x-text="viewer.error" role="alert"></div>
+        <template x-if="!viewer.loading && !viewer.error">
+          <div class="viewer-content">
+            <pre class="file-content" tabindex="0" aria-label="Contenuto del file"><code x-text="viewer.content"></code></pre>
+            <p class="muted small" x-show="viewer.truncated">Anteprima troncata agli 8000 caratteri.</p>
+          </div>
+        </template>
+      </div>
+    </aside>
+  </div>
+
+  <noscript>
+    <div class="noscript">Elysium Agent richiede JavaScript abilitato per funzionare.</div>
+  </noscript>
+
+  <footer><p>Elysium Agent — harness multi-agente · Elysium Swarmloop v0.15.0</p></footer>
+</body>
+</html>

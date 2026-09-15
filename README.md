@@ -2,6 +2,11 @@
 
 A next-generation agent harness: a **minimal, auditable core** (Pi-inspired) with **hierarchical orchestration (depth ≤ 2)** and **streaming quality gates** as first-class, opt-in extensions (Elysium-Swarmloop-inspired).
 
+> **Repo layout**: this repo hosts two related projects.
+> - **Root** — the TypeScript/pnpm harness (this README). Packages under `packages/`, CLI via `pnpm agent`, skills in `skills/`.
+> - **`agent-python/`** — the legacy Python v0.16 web harness (FastAPI + Alpine SPA), kept for reference. Run its tests with a Python venv: `cd agent-python && python -m pytest -q` (108 tests green). Its own README lives at `agent-python/README.md`.
+> - **`skills/`** — agent skills shipped with the harness and indexed into the CLI system prompt (`/skills`): `living-dashboard` (UI), `elysium-swarmloop`, `elysium-bench-operations`.
+
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                      Extensions (opt-in)                     │
