@@ -149,13 +149,15 @@ export function playRainIntro(opts: { rows?: number; ms?: number } = {}): Promis
       for (let r = 0; r < rows; r += 1) {
         let line = " ";
         for (let c = 0; c < cols; c += 1) {
+          // Dense rain: every cell always shows a bit; brightness decays
+          // with distance from the column head (classic matrix look from
+          // frame one — no half-empty blocks on early ticks).
           const head = ((offsets[c] ?? 0) + tick * (speeds[c] ?? 1)) % (rows + 3);
-          const delta = head - r;
-          let cell = "  ";
+          const delta = (head - r + rows + 3) % (rows + 3);
+          let cell = `${dGreen(bit())} `;
           if (delta === 0) cell = `${neon(bit())} `;
           else if (delta === 1) cell = `${lime(bit())} `;
           else if (delta === 2) cell = `${moss(bit())} `;
-          else if (delta > 2 && delta < 5) cell = `${dGreen(bit())} `;
           line += cell;
         }
         out += `\u001B[K${line.trimEnd()}\n`;
@@ -165,6 +167,9 @@ export function playRainIntro(opts: { rows?: number; ms?: number } = {}): Promis
     };
 
     render();
+    // NOTE: deliberately NOT unref'd — at startup nothing else may keep the
+    // loop alive, and an unref'd timer would let the process exit mid-rain.
+    // The interval is always cleared on completion below.
     timer = setInterval(() => {
       tick += 1;
       render();
@@ -175,7 +180,6 @@ export function playRainIntro(opts: { rows?: number; ms?: number } = {}): Promis
         resolve();
       }
     }, 70);
-    timer.unref();
   });
 }
 
