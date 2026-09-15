@@ -108,6 +108,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@elysium/core':
+        specifier: workspace:*
+        version: link:packages/core
     devDependencies:
       '@biomejs/biome':
         specifier: ^1.9.4

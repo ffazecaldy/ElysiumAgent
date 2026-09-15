@@ -34,6 +34,24 @@ A next-generation agent harness: a **minimal, auditable core** (Pi-inspired) wit
 
 Requires Node ≥ 22 and pnpm ≥ 9.
 
+### Global `elysium` command (Windows)
+
+The harness runs **from source**, so any edit to this repo is live on the next launch — no rebuild, no reinstall:
+
+1. One-time PATH setup (if `elysium` is not found): add `%LOCALAPPDATA%\pnpm\bin` to your user PATH, e.g.
+   `powershell -Command "[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path','User') + ';' + \"$env:LOCALAPPDATA\pnpm\bin\", 'User')"` then open a new terminal.
+2. Create `%LOCALAPPDATA%\pnpm\bin\elysium.ps1`:
+
+   ```powershell
+   Set-Location "C:\path\to\ElysiumHarness"
+   & node "node_modules\tsx\dist\cli.mjs" "bin\agent.ts" @args
+   ```
+
+   (and an `elysium.cmd` twin with `cd /d` + `node … %*` for cmd.exe).
+3. From any PowerShell: `elysium` opens the REPL; `elysium --provider mock` for offline mode.
+
+Useful env vars: `ELYSIUM_BASH_TIMEOUT_MS` (bash tool), `ELYSIUM_SPAWN_TIMEOUT_MS` (swarm per-agent), `ELYSIUM_RAIN_MS=0` (skip the boot rain), `ELYSIUM_SKILLS_DIR` (extra skills root).
+
 ```bash
 pnpm install
 pnpm build          # typechecks every package (strict, zero errors)
