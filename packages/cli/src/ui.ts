@@ -20,8 +20,7 @@ const COLORS_ENABLED =
   process.stdout.isTTY === true;
 
 function colorize(open: string, reset: string): Colorize {
-  return (s: string): string =>
-    COLORS_ENABLED ? `\u001B[${open}m${s}\u001B[${reset}m` : s;
+  return (s: string): string => (COLORS_ENABLED ? `\u001B[${open}m${s}\u001B[${reset}m` : s);
 }
 
 // ── Semantic palette: every color HAS a role ──
@@ -82,8 +81,7 @@ export function hr(width?: number): string {
 
 /** Aligned "label      value" status line with a 2-space gutter. */
 export function kv(label: string, value: string): string {
-  const pad = Math.max(1, 12 - label.length);
-  return `  ${cyan(label.padEnd(12))}${" ".repeat(0)}${value}`;
+  return `  ${dim(label.padEnd(12))}${value}`;
 }
 
 /**
@@ -95,21 +93,42 @@ export function section(title: string): string {
 }
 
 /**
- * Wordmark banner: typographic, no box art. "ELYSIUM" in bold with a
- * thin rule and the product line beneath — Claude-Code-school restraint.
+ * Wordmark banner: rounded box, bold wordmark, dim tagline — restrained
+ * (Raycast/Linear school: one box, no noise). Non-TTY: plain two lines so
+ * piped/test output stays deterministic.
  */
 export function box(title: string, subtitle = ""): string {
-  const rule = dim("─".repeat(Math.max(40, (process.stdout.columns ?? 100) - 4)));
-  const head = `  ${bold(white(title))}`;
-  const sub = subtitle.length > 0 ? `  ${dim(subtitle)}` : "";
-  return [rule, head, sub, rule].filter((l) => l.length > 0).join("\n");
+  if (!COLORS_ENABLED) {
+    return [title, subtitle].filter((l) => l.length > 0).join("\n");
+  }
+  const termW = Math.max(40, (process.stdout.columns ?? 100) - 4);
+  const inner = Math.min(64, termW) - 2;
+  const row = (content: string): string => {
+    const pad = Math.max(0, inner - visualWidth(content));
+    return `${dim("│")}${content}${" ".repeat(pad)}${dim("│")}`;
+  };
+  return [
+    dim(`╭${"─".repeat(inner)}╮`),
+    row(`  ${bold(white(title))}`),
+    ...(subtitle.length > 0 ? [row(`  ${dim(subtitle)}`)] : []),
+    dim(`╰${"─".repeat(inner)}╯`),
+  ].join("\n");
 }
 
 // ── Spinner ───────────────────────────────────────────────────────
 
 /** Thinking spinner: orbiting dot around a center dot (thinking = orbit). */
 const THINKING_FRAMES: readonly string[] = [
-  "⠋ ⠁", "⠙ ⠉", "⠹ ⠙", "⠸ ⠜", "⠼ ⠣", "⠴ ⠡", "⠦ ⠋", "⠧ ⠇", "⠇ ⠏", "⠏ ⠋",
+  "⠋ ⠁",
+  "⠙ ⠉",
+  "⠹ ⠙",
+  "⠸ ⠜",
+  "⠼ ⠣",
+  "⠴ ⠡",
+  "⠦ ⠋",
+  "⠧ ⠇",
+  "⠇ ⠏",
+  "⠏ ⠋",
 ];
 
 export interface Spinner {
@@ -178,7 +197,9 @@ export function thinkingSpinner(): Spinner {
   const render = (): void => {
     const secs = Math.floor((Date.now() - startedAt) / 1000);
     const t = secs > 0 ? ` ${secs}s` : "";
-    process.stdout.write(`\r\u001B[K  ${cyan(ORBIT[index] ?? "")} ${dim("thinking" + t + " — Esc to cancel")}`);
+    process.stdout.write(
+      `\r\u001B[K  ${cyan(ORBIT[index] ?? "")} ${dim("thinking" + t + " — Esc to cancel")}`,
+    );
   };
 
   return {
@@ -249,18 +270,30 @@ export function translateProviderError(err: unknown): TranslatedError {
   const is429 = /\b429\b/.test(hay);
   const outOfCredits = /\b1113\b/.test(hay) || /balance|insufficient|余额|不足/.test(chain);
   if (is429 && outOfCredits) {
-    return { title: "Provider account out of credits", hint: "recharge or /model <another>", detail };
+    return {
+      title: "Provider account out of credits",
+      hint: "recharge or /model <another>",
+      detail,
+    };
   }
   if (is429) {
     return { title: "Rate limited", hint: "wait or switch provider", detail };
   }
   if (/\b(?:401|403)\b/.test(hay)) {
-    return { title: "Invalid or unauthorized API key", hint: "check /key <provider> <key>", detail };
+    return {
+      title: "Invalid or unauthorized API key",
+      hint: "check /key <provider> <key>",
+      detail,
+    };
   }
   if (/\b404\b/.test(hay)) {
     return { title: "Model not found", hint: "/model <provider> <model>", detail };
   }
-  if (/(fetch failed|enotfound|econnrefused|econnreset|eai_again|etimedout|request failed|network)/.test(hay)) {
+  if (
+    /(fetch failed|enotfound|econnrefused|econnreset|eai_again|etimedout|request failed|network)/.test(
+      hay,
+    )
+  ) {
     return { title: "Cannot reach the provider host", hint: "check connection", detail };
   }
   return { title: "Provider error", hint: "check /connections and retry", detail };

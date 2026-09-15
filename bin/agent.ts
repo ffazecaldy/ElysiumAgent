@@ -145,7 +145,7 @@ const MODES: Record<Mode, ModeConfig> = {
   medium: {
     label: "medium - balanced",
     maxTurns: 8,
-    maxSubtasks: 3,
+    maxSubtasks: 5,
     repairRounds: 1,
     showToolOutput: true,
     systemPromptSuffix: "",
@@ -153,7 +153,7 @@ const MODES: Record<Mode, ModeConfig> = {
   high: {
     label: "high - thorough, more repair",
     maxTurns: 12,
-    maxSubtasks: 5,
+    maxSubtasks: 10,
     repairRounds: 2,
     showToolOutput: true,
     systemPromptSuffix: " Think step by step and verify your work before answering.",
@@ -161,7 +161,7 @@ const MODES: Record<Mode, ModeConfig> = {
   max: {
     label: "max - maximum effort",
     maxTurns: 16,
-    maxSubtasks: 6,
+    maxSubtasks: 15,
     repairRounds: 2,
     showToolOutput: true,
     systemPromptSuffix:
@@ -836,7 +836,7 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout,
-    prompt: "> ",
+    prompt: `${cyan("❯")} `,
     historySize: 100,
   });
   rl.prompt();

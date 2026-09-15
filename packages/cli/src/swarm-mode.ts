@@ -125,7 +125,12 @@ interface PlannedSubtask {
 
 const DEFAULT_MAX_SUBTASKS = 3;
 const BUILDER_MAX_TURNS = 6;
-const MAX_CONCURRENCY = 2;
+/**
+ * Concurrency: every planned subtask runs in PARALLEL (the view shows at
+ * most 3 live panes; the rest stream beyond them). Bounded by the plan
+ * size, which is itself bounded by the effort mode's maxSubtasks.
+ */
+const MAX_CONCURRENCY = Number.POSITIVE_INFINITY;
 const REPAIR_ROUNDS = 1;
 /** Marker the Orchestrator appends to task context when re-spawning after critic gaps. */
 const REPAIR_MARKER = /Critic feedback, repair round (\d+)/;

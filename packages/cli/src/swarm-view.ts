@@ -1,29 +1,43 @@
 /**
  * packages/cli/src/swarm-view.ts — live multi-pane view for `/swarm`.
  *
- * Layout (TTY): one full-screen live area redrawn in place —
- *   ┌ MASTER (plan, critic/repair trail) ─┬──── up to 3 SUBAGENT panes ────┐
- *   │ goal + per-task status glyphs       │ task-1: streamed output lines  │
- *   │ event trail (critic, repair, …)     │ task-2: tools + last output    │
- *   └─────────────────────────────────────┴──── task-3 ────────────────────┘
+ * Layout (TTY): one live area redrawn in place —
  *
- * Hard cap: at most 3 simultaneous subagent panes. Panes are assigned to
- * RUNNING tasks first; finished panes are recycled for queued tasks, so a
- * plan with N>3 subtasks still shows a live window of 3 (the rest appear as
- * queued rows in the MASTER column).
+ *   ╭─ ELYSIUM SWARM ─ <goal>
+ *     MASTER
+ *     [ok] task-1  crea il file alpha.txt · 8s      ← ALL tasks listed
+ *     >>  task-2  crea beta.txt · 12s
+ *     ··  task-4  task in coda
+ *     -- critic task-1: passed                      ← event trail
+ *   ╭─ >> task-2 · crea beta.txt con contatore · 12s
+ *   │ streaming output line…
+ *   │ second line…
+ *   ╰─ tools 3 · write · attempts 2
+ *   ╭─ >> task-3 · verifica i contenuti · 7s
+ *   │ …
+ *   ╰─ tools 1
+ *   ╭─ >> task-5 · quarto pane visibile · 3s
+ *   │ …
+ *   ╰─ tools 0
+ *     panes 3/3 · + altri 4 subagent in parallelo · Ctrl+C/Esc cancella
+ *
+ * The agent may run ANY number of subagents; the UI shows AT MOST
+ * {@link MAX_PANES} live panes (running → queued → finished priority) plus
+ * the MASTER column listing every task, and the footer counts the ones
+ * running beyond the visible panes.
  *
  * Non-TTY (piped/tests): nothing is redrawn — events degrade to compact
  * linear lines, so piped output stays deterministic.
  */
-import { cyan, dim, green, magenta, marks, red, stripAnsi, yellow } from "./ui";
+import { cyan, dim, green, magenta, red, stripAnsi, yellow, marks } from "./ui";
 
-/** Maximum simultaneous subagent panes (the "max 3 CLI" rule). */
+/** Maximum simultaneous subagent panes (the "max 3 visible" rule). */
 export const MAX_PANES = 3;
 
 export type TaskStatus = "queued" | "running" | "repair" | "pass" | "fail" | "partial";
 
 const STATUS_GLYPH: Record<TaskStatus, string> = {
-  queued: dim("·"),
+  queued: dim("··"),
   running: magenta(">>"),
   repair: yellow("[!!]"),
   pass: green(marks.ok),
@@ -33,7 +47,7 @@ const STATUS_GLYPH: Record<TaskStatus, string> = {
 
 /** Status glyph for a task status (exported for tests). */
 export function statusGlyph(status: TaskStatus): string {
-  return STATUS_GLYPH[status] ?? dim("·");
+  return STATUS_GLYPH[status] ?? dim("··");
 }
 
 /** Truncate a plain string to `w` visible chars, ellipsis-marked. */
@@ -45,8 +59,8 @@ export function truncate(s: string, w: number): string {
 
 /**
  * Pane assignment: running tasks first, then QUEUED (so upcoming work is
- * already visible and transitions are smooth), then the freshest finished
- * ones fill the remaining slots. Never exceeds MAX_PANES. Exported for tests.
+ * already visible), then the freshest finished ones fill the remaining
+ * slots. Never exceeds MAX_PANES. Exported for tests.
  */
 export function assignPanes(order: string[], status: Map<string, TaskStatus>): string[] {
   const isLive = (id: string): boolean => {
@@ -70,7 +84,7 @@ interface TaskPane {
   attempts: number;
 }
 
-const OUT_ROWS = 5;
+const OUT_ROWS = 2;
 
 export interface SwarmView {
   /** Print the plan block and (TTY) start the live area. */
@@ -92,16 +106,15 @@ export function createSwarmView(): SwarmView {
   const tasks = new Map<string, TaskPane>();
   const order: string[] = [];
   let goalText = "";
+  let workspacePath = "";
   const trail: string[] = [];
   let timer: NodeJS.Timeout | null = null;
   let frameRows = 0;
 
   const pushTrail = (line: string): void => {
     trail.push(line);
-    if (trail.length > 6) trail.shift();
+    if (trail.length > 3) trail.shift();
   };
-
-  const paneFor = (id: string): TaskPane | undefined => tasks.get(id);
 
   const setTaskStatus = (id: string, status: TaskStatus): void => {
     const t = tasks.get(id);
@@ -113,113 +126,82 @@ export function createSwarmView(): SwarmView {
     console.log(line);
   };
 
+  const elapsedOf = (t: TaskPane): string =>
+    t.startedAt === null
+      ? ""
+      : ` · ${Math.max(0, Math.floor(((t.endedAt ?? Date.now()) - t.startedAt) / 1000))}s`;
+
+  const statusMap = (): Map<string, TaskStatus> =>
+    new Map([...tasks.entries()].map(([k, v]) => [k, v.status]));
+
+  const clip = (s: string, width: number): string => {
+    const visible = stripAnsi(s).length;
+    return visible <= width ? s : dim(truncate(stripAnsi(s), width - 1));
+  };
+
   const renderFrame = (): void => {
     if (!animated) return;
     const width = Math.max(80, process.stdout.columns ?? 100);
+    const inner = width - 6;
     const rows: string[] = [];
-    const masterW = 38;
-    const paneIdsAll = assignPanes(
-      order,
-      new Map([...tasks.entries()].map(([k, v]) => [k, v.status])),
-    );
-    // Adaptive pane count: each pane needs ~26 visible columns; never 0.
-    const maxFit = Math.max(1, Math.floor((width - masterW - 8) / 26));
-    const paneIds = paneIdsAll.slice(0, Math.max(1, maxFit));
-    const paneCount = Math.max(1, paneIds.length);
-    const paneW = Math.max(24, Math.floor((width - masterW - 8) / paneCount) - 2);
 
-    rows.push(`  ${bold0("ELYSIUM SWARM")}  ${dim(truncate(goalText, width - 24))}`);
-    rows.push(dim("─".repeat(width - 2)));
+    // ── Header ──
+    rows.push(clip(`╭─ ${cyan("ELYSIUM SWARM")}  ${dim(truncate(goalText, inner - 18))}`, inner));
 
-    // Content rows: master column lines interleaved with pane lines.
-    const bodyRows = 1 + OUT_ROWS + 1;
-    const masterLines = renderMasterLines(masterW, bodyRows);
-    for (let r = 0; r < bodyRows; r += 1) {
-      const left = masterLines[r] ?? "";
-      if (r === 0) {
-        const cells = paneIds.map((id) => paneTitle(id, paneW));
-        rows.push(`${left}${dim("│ ")}${cells.join(dim("│ "))}`);
-      } else if (r <= OUT_ROWS) {
-        const row = r - 1;
-        const cells = paneIds.map((id) => paneOutLine(id, row, paneW));
-        rows.push(`${left}${dim("│ ")}${cells.join(dim("│ "))}`);
-      } else {
-        const cells = paneIds.map((id) => paneMetaLine(id, paneW));
-        rows.push(`${left}${dim("│ ")}${cells.join(dim("│ "))}`);
-      }
-    }
-    rows.push(dim("─".repeat(width - 2)));
-    const runningCount = [...tasks.values()].filter(
-      (t) => t.status === "running" || t.status === "repair",
-    ).length;
-    const queuedCount = [...tasks.values()].filter((t) => t.status === "queued").length;
-    rows.push(
-      `  ${dim(`running ${runningCount}/${order.length}${queuedCount > 0 ? ` · queued ${queuedCount}` : ""} · panes ${paneIds.length}/${MAX_PANES} · Ctrl+C/Esc cancels`)}`,
-    );
-
-    // Move cursor up to the frame origin and rewrite every row. Rows are
-    // built within the visible width (cells pre-clipped), so no raw slicing:
-    // a naive slice(0, width) would count invisible ANSI bytes and cut cells.
-    const clear = rows.map((l) => `\u001B[K${l}`).join("\n");
-    process.stdout.write(`${frameRows > 0 ? `\u001B[${frameRows}A\r` : ""}${clear}\n`);
-    frameRows = rows.length;
-  };
-
-  const renderMasterLines = (w: number, count: number): string[] => {
-    const out: string[] = [];
-    out.push(`  ${cyan("MASTER")}`);
+    // ── MASTER: every task, full list ──
+    rows.push(`  ${cyan("MASTER")}`);
     for (const id of order) {
       const t = tasks.get(id);
       if (!t) continue;
-      const elapsed =
-        t.startedAt !== null
-          ? ` ${Math.floor(((t.endedAt ?? Date.now()) - t.startedAt) / 1000)}s`
-          : "";
-      out.push(
-        `  ${statusGlyph(t.status)} ${truncate(id, 8)} ${truncate(t.goal, w - 16)}${dim(elapsed)}`,
+      rows.push(
+        clip(
+          `  ${statusGlyph(t.status)} ${dim(id.padEnd(8))}${truncate(t.goal, inner - 18)}${dim(elapsedOf(t))}`,
+          inner,
+        ),
       );
     }
-    for (const line of trail) out.push(`  ${dim(truncate(line, w - 2))}`);
-    while (out.length < count) out.push("");
-    return out.slice(0, count).map((l) => padVisual(l, w + 2));
-  };
+    for (const line of trail) rows.push(clip(`  ${dim(`-- ${line}`)}`, inner));
 
-  const paneTitle = (id: string, w: number): string => {
-    const t = tasks.get(id);
-    if (!t) return padVisual("", w);
-    const elapsed =
-      t.startedAt !== null
-        ? ` ${Math.floor(((t.endedAt ?? Date.now()) - t.startedAt) / 1000)}s`
-        : "";
-    return padVisual(
-      ` ${statusGlyph(t.status)} ${truncate(id, 8)} ${truncate(t.goal, Math.max(6, w - 16))}${dim(elapsed)} `,
-      w,
-    );
-  };
+    // ── Panes: stacked full-width boxes, max MAX_PANES ──
+    const paneIds = assignPanes(order, statusMap());
+    for (const id of paneIds) {
+      const t = tasks.get(id);
+      if (!t) continue;
+      rows.push(
+        clip(
+          `╭─ ${statusGlyph(t.status)} ${dim(id)} · ${truncate(t.goal, inner - 14)}${dim(elapsedOf(t))}`,
+          inner,
+        ),
+      );
+      for (let i = 0; i < OUT_ROWS; i += 1) {
+        const raw = t.outLines[i] ?? "";
+        const line = raw.length > 0 ? dim(truncate(raw, inner - 3)) : dim("…");
+        rows.push(clip(`│ ${line}`, inner));
+      }
+      const meta = `╰─ tools ${t.tools}${t.lastTool.length > 0 ? ` · ${t.lastTool}` : ""}${t.attempts > 1 ? ` · attempts ${t.attempts}` : ""}`;
+      rows.push(clip(meta, inner));
+    }
 
-  const paneOutLine = (id: string, row: number, w: number): string => {
-    const t = tasks.get(id);
-    const raw = t?.outLines[row] ?? "";
-    const line = raw.length > 0 ? dim(truncate(raw, Math.max(4, w - 4))) : "";
-    return padVisual(` ${line} `, w);
-  };
+    // ── Footer: panes + subagents beyond the visible cap ──
+    const runningCount = [...tasks.values()].filter(
+      (t) => t.status === "running" || t.status === "repair",
+    ).length;
+    const hidden = Math.max(0, order.length - MAX_PANES);
+    const parts = [
+      `panes ${paneIds.length}/${MAX_PANES}`,
+      hidden > 0 ? `+ altri ${hidden} subagent in parallelo` : "",
+      "Ctrl+C/Esc cancella",
+    ].filter((p) => p.length > 0);
+    rows.push(`  ${dim(parts.join(" · "))}`);
 
-  const paneMetaLine = (id: string, w: number): string => {
-    const t = tasks.get(id);
-    if (!t) return padVisual("", w);
-    const last = t.lastTool.length > 0 ? ` · ${t.lastTool}` : "";
-    return padVisual(
-      ` ${dim(`tools ${t.tools}${t.attempts > 1 ? ` · attempts ${t.attempts}` : ""}${last}`)} `,
-      w,
-    );
+    // Repaint: jump to frame origin, clear+rewrite every row (also the ones
+    // left over if the frame shrank). No raw ANSI-unaware slicing anywhere.
+    let out = frameRows > 0 ? `\u001B[${frameRows}A\r` : "";
+    const total = Math.max(rows.length, frameRows);
+    for (let i = 0; i < total; i += 1) out += `\u001B[K${rows[i] ?? ""}\n`;
+    process.stdout.write(out);
+    frameRows = rows.length;
   };
-
-  const padVisual = (s: string, w: number): string => {
-    const visible = stripAnsi(s).length;
-    return visible >= w ? `${s}${" "}` : `${s}${" ".repeat(w - visible)}`;
-  };
-
-  const bold0 = (s: string): string => `\u001B[1m${s}\u001B[22m`;
 
   const startLoop = (): void => {
     if (!animated || timer !== null) return;
@@ -228,13 +210,13 @@ export function createSwarmView(): SwarmView {
   };
 
   const noteOut = (id: string, text: string): void => {
-    const t = paneFor(id);
+    const t = tasks.get(id);
     if (!t) return;
     for (const raw of text.split("\n")) {
       const line = stripAnsi(raw).replace(/\s+/g, " ").trim();
       if (line.length === 0) continue;
-      // Store plain text; the renderer clips to the pane width (visible).
-      t.outLines.push(truncate(line, 120));
+      // Store plain text; the renderer clips to the width (visible).
+      t.outLines.push(truncate(line, 160));
       while (t.outLines.length > OUT_ROWS) t.outLines.shift();
     }
   };
@@ -242,6 +224,7 @@ export function createSwarmView(): SwarmView {
   return {
     plan(goal, list, workspace): void {
       goalText = goal;
+      workspacePath = workspace;
       console.log(`\n  ${cyan("plan")}`);
       for (const t of list) {
         tasks.set(t.id, {
@@ -257,13 +240,12 @@ export function createSwarmView(): SwarmView {
         order.push(t.id);
         console.log(`    ${dim(t.id)}  ${t.goal}`);
       }
-      const overflow = list.length - MAX_PANES;
-      if (overflow > 0) {
+      if (list.length > MAX_PANES) {
         console.log(
-          `  ${dim(`live view: ${MAX_PANES} panes (cap), ${overflow} queued will recycle into panes`)}`,
+          `  ${dim(`vista live: ${MAX_PANES} pane + master — ${list.length - MAX_PANES} subagent seguiranno in parallelo`)}`,
         );
       }
-      console.log(`  ${dim(`workspace: ${workspace}`)}`);
+      console.log(`  ${dim(`workspace: ${workspacePath}`)}`);
       if (!animated) {
         linear(`  ${dim("events:")}`);
         return;
@@ -272,7 +254,7 @@ export function createSwarmView(): SwarmView {
       startLoop();
     },
     taskStarted(id): void {
-      const t = paneFor(id);
+      const t = tasks.get(id);
       if (t) {
         t.status = "running";
         t.startedAt = Date.now();
@@ -285,7 +267,7 @@ export function createSwarmView(): SwarmView {
       noteOut(id, text);
     },
     taskTool(id, tool, isError): void {
-      const t = paneFor(id);
+      const t = tasks.get(id);
       if (t) {
         t.tools += 1;
         t.lastTool = `${tool}${isError ? " [!!]" : ""}`;
@@ -293,7 +275,7 @@ export function createSwarmView(): SwarmView {
       if (!animated) linear(`  ${dim(`tool ${id} ${tool}${isError ? " [!!]" : ""}`)}`);
     },
     taskEnded(id, status, durationMs, attempts): void {
-      const t = paneFor(id);
+      const t = tasks.get(id);
       const s: TaskStatus =
         status === "pass"
           ? "pass"
@@ -306,10 +288,7 @@ export function createSwarmView(): SwarmView {
         t.status = s;
         t.endedAt = Date.now();
         t.attempts = attempts;
-        if (t.startedAt !== null && t.endedAt !== null) {
-          // Keep the pane showing final output; freeze elapsed at end.
-          t.startedAt = t.endedAt - durationMs;
-        }
+        if (t.startedAt !== null) t.startedAt = t.endedAt - durationMs;
       }
       pushTrail(
         `${id} ${status} (${(durationMs / 1000).toFixed(1)}s, ${attempts} attempt${attempts > 1 ? "s" : ""})`,
@@ -318,14 +297,14 @@ export function createSwarmView(): SwarmView {
     },
     critic(id, passed): void {
       pushTrail(`critic ${id}: ${passed ? "passed" : "repair scheduled"}`);
-      if (!animated)
+      if (!animated) {
         linear(
           `  ${passed ? green(marks.ok) : yellow(marks.warn)} critic ${id} ${passed ? "passed" : "repair scheduled"}`,
         );
+      }
     },
     repair(id, round): void {
-      const t = paneFor(id);
-      if (t) t.status = "repair";
+      setTaskStatus(id, "repair");
       pushTrail(`repair ${id} (round ${round})`);
       if (!animated) linear(`  ${yellow(marks.warn)} repair ${id}`);
     },
@@ -338,7 +317,7 @@ export function createSwarmView(): SwarmView {
         clearInterval(timer);
         timer = null;
       }
-      // Leave the last frame on screen; caller prints the report after.
+      // Leave the last frame on screen; the caller prints the report after.
       frameRows = 0;
     },
   };

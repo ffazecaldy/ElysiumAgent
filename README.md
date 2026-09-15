@@ -148,9 +148,9 @@ For live judging, swap in `createLlmJudge(provider)`.
 | Mode | Max turns | Swarm subtasks | Repair rounds | Tool output | System prompt |
 |---|---|---|---|---|---|
 | `min` | 4 | 1 | 0 | hidden | Terse — minimal instructions |
-| `medium` (default) | 8 | 3 | 1 | visible | Standard |
-| `high` | 12 | 5 | 2 | visible | Stricter — explicit verification steps |
-| `max` | 16 | 6 | 2 | visible | Strictest — double-check everything |
+| `medium` (default) | 8 | 5 | 1 | visible | Standard |
+| `high` | 12 | 10 | 2 | visible | Stricter — explicit verification steps |
+| `max` | 16 | 15 | 2 | visible | Strictest — double-check everything |
 
 What each column controls: max turns caps the agent loop per turn; swarm subtasks caps the planner's fan-out in `/swarm`; repair rounds is the number of critic-driven retries per failed subtask (note: `/swarm` ignores this column and always uses exactly **1** repair round); tool output visibility controls whether tool results are echoed in the REPL; the system prompt column describes how prescriptive the system prompt is at that mode. `/mode` without arguments shows the active mode.
 
@@ -161,7 +161,7 @@ What each column controls: max turns caps the agent loop per turn; swarm subtask
 Swarmloop mode is a gauntlet-style orchestration profile built on the same depth-≤2 `Orchestrator` engine:
 
 1. **Plan** — your goal goes to a planner agent that decomposes it into subtasks.
-2. **Build** — parallel builder agents (with tool access) execute the subtasks.
+2. **Build** — all subtasks run in **parallel** builder agents (with tool access); the live view shows at most 3 panes at once plus the MASTER column and a footer counting the subagents running beyond the visible panes ("+ altri N subagent in parallelo").
 3. **Judge** — a fresh-context critic (sees only the artifact, never the builder's history) judges each result.
 4. **Repair** — failed results get exactly **one** repair round (fixed — the effort mode does **not** change it) with the critic's gaps as feedback.
 5. **Report** — the final report carries per-subtask status, critic verdicts, and quality scores.
