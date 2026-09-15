@@ -29,7 +29,10 @@ function projectRoot(): string {
 }
 
 /** Run the CLI in mock mode with a scripted REPL session; return stdout+stderr and exit code. */
-function runReplSession(lines: string[], timeoutMs = 60_000): { out: string; exitCode: number | null } {
+function runReplSession(
+  lines: string[],
+  timeoutMs = 60_000,
+): { out: string; exitCode: number | null } {
   const root = projectRoot();
   // Keep the process stateless: redirect config/cache to an isolated temp dir.
   const argvOverride = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "b5-")), "argv");

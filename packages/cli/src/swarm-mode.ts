@@ -131,6 +131,11 @@ const BUILDER_MAX_TURNS = 6;
  * size, which is itself bounded by the effort mode's maxSubtasks.
  */
 const MAX_CONCURRENCY = Number.POSITIVE_INFINITY;
+/** Per-spawn hard cap: a hung builder stream must not wedge the whole run. */
+function swarmSpawnTimeoutMs(): number {
+  const raw = Number(process.env.ELYSIUM_SPAWN_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 600_000;
+}
 const REPAIR_ROUNDS = 1;
 /** Marker the Orchestrator appends to task context when re-spawning after critic gaps. */
 const REPAIR_MARKER = /Critic feedback, repair round (\d+)/;
@@ -428,6 +433,54 @@ export class StreamLineBatcher {
   }
 }
 
+// ── Plan-only seam (used by /plan) ────────────────────────────────
+
+/** What {@link planGoal} returns: the decomposed plan, nothing executed. */
+export interface SwarmPlan {
+  goal: string;
+  source: "llm" | "fallback";
+  subtasks: Array<{ id: string; goal: string; acceptanceCriteria: string[] }>;
+  provider: SwarmProviderConfig;
+}
+
+/**
+ * Decomposes a goal into subtasks with acceptance criteria WITHOUT running
+ * the gauntlet — the planning turn of {@link runSwarmGoal} exposed as its
+ * own seam (powers the `/plan` command). Falls back to a single subtask on
+ * unparseable output, exactly like the planner inside the full run.
+ * LLM failures throw (the caller renders them).
+ */
+export async function planGoal(opts: {
+  goal: string;
+  provider: SwarmProviderConfig;
+  maxSubtasks?: number;
+  signal?: AbortSignal;
+}): Promise<SwarmPlan> {
+  const maxSubtasks = Math.max(1, Math.floor(opts.maxSubtasks ?? DEFAULT_MAX_SUBTASKS));
+  const provider: LlmProvider = new OpenAICompatibleProvider({
+    baseUrl: opts.provider.baseUrl,
+    apiKey: opts.provider.apiKey,
+    model: opts.provider.model,
+  });
+  const raw = await completeOnce(
+    provider,
+    JSON_ONLY_SYSTEM_PROMPT,
+    buildPlannerPrompt(opts.goal, maxSubtasks),
+    opts.signal,
+  );
+  const planned = parsePlannerOutput(raw, opts.goal, maxSubtasks);
+  return {
+    goal: opts.goal,
+    source: planned.source,
+    subtasks: planned.subtasks.map((s) => ({
+      id: s.id,
+      goal: s.goal,
+      acceptanceCriteria: s.acceptanceCriteria,
+    })),
+    provider: opts.provider,
+  };
+}
+
 // ── Main entry point ──────────────────────────────────────────────
 
 /**
@@ -668,6 +721,7 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
     critic,
     repairRounds: REPAIR_ROUNDS,
     maxConcurrency: MAX_CONCURRENCY,
+    spawnTimeoutMs: swarmSpawnTimeoutMs(),
     signal: opts.signal,
     onEvent: (event: HarnessEvent): void => {
       // Map orchestrator telemetry onto the runtime-mode event surface;

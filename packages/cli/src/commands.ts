@@ -264,7 +264,10 @@ function makeTaskProvider(config: ProviderConfig, task: string): LlmProvider {
     try {
       return createOpenAiCompatibleProvider(config);
     } catch (err: unknown) {
-      const message = err instanceof Error && err.message.length > 0 ? err.message : "provider initialization failed";
+      const message =
+        err instanceof Error && err.message.length > 0
+          ? err.message
+          : "provider initialization failed";
       throw new ProviderInitializationError(
         `openai-compatible provider init failed: ${message}`,
         "Check the provider endpoint and API key configuration",
@@ -344,13 +347,13 @@ function parseGoals(goalsJson: string): SubagentTask[] {
     const message = err instanceof Error ? err.message : String(err);
     throw new RecoverableCliError(
       `invalid goals JSON: ${message}`,
-      "Pass valid JSON like [{\"id\":\"a\",\"goal\":\"...\"}]",
+      'Pass valid JSON like [{"id":"a","goal":"..."}]',
     );
   }
   if (!Array.isArray(parsed) || parsed.length === 0) {
     throw new RecoverableCliError(
       "goals must be a non-empty JSON array of {id, goal}",
-      "Pass an array like [{\"id\":\"a\",\"goal\":\"...\"}]",
+      'Pass an array like [{"id":"a","goal":"..."}]',
     );
   }
   return parsed.map((entry, index) => {

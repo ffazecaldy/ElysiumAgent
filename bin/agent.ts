@@ -45,6 +45,7 @@ import {
   UnknownProviderError,
   type ToolResultMessage,
   type ToolCallPart,
+  type AgentMessage,
   makeEvent,
   type EventBus,
 } from "@elysium/core";
@@ -79,11 +80,21 @@ import {
   welcomeScreen,
   statusBar,
   helpScreen,
+  HELP_CATALOG,
+  setTheme,
+  currentTheme,
 } from "../packages/cli/src/ui";
 import { CLI_VERSION } from "../packages/cli/src/index";
-import { runSwarmGoal, type SwarmEvent } from "../packages/cli/src/swarm-mode";
+import { runSwarmGoal, planGoal, type SwarmEvent } from "../packages/cli/src/swarm-mode";
 import { createSwarmView, type SwarmView } from "../packages/cli/src/swarm-view";
 import { collectSkills, skillRoots, skillsPromptBlock } from "../packages/cli/src/skills";
+import {
+  addMemoryEntry,
+  clearMemory,
+  loadMemory,
+  memoryPromptBlock,
+} from "../packages/cli/src/memory-store";
+import { probeServer, readMcpConfig } from "../packages/cli/src/mcp-client";
 
 /**
  * PROJECT_ROOT governs where .env is read/written. The ELYSIUM_PROJECT_ROOT
@@ -175,9 +186,14 @@ const MODES: Record<Mode, ModeConfig> = {
 /** Active effort mode. Session-only: nothing here is written to .env. */
 let currentMode: Mode = "medium";
 
-/** System prompt for the current mode: base prompt + skills index + the mode's suffix. */
+/** System prompt for the current mode: base + skills index + operator memory + mode suffix. */
 function systemPromptForMode(): string {
-  return SYSTEM_PROMPT + SKILLS_PROMPT_BLOCK + MODES[currentMode].systemPromptSuffix;
+  return (
+    SYSTEM_PROMPT +
+    SKILLS_PROMPT_BLOCK +
+    memoryPromptBlock(loadMemory(PROJECT_ROOT)) +
+    MODES[currentMode].systemPromptSuffix
+  );
 }
 
 // ── Session stats (for /status /history /save) ────────────────────
@@ -189,7 +205,12 @@ interface SessionStats {
   tokensOut: number;
   turns: number;
   transcript: Array<{ role: string; text: string }>;
+  /** Rolling conversation history carried across prompts (bounded). */
+  history: AgentMessage[];
 }
+
+/** History cap: messages kept across prompts (bounded context growth). */
+const HISTORY_MAX_MESSAGES = 60;
 
 function newSessionStats(): SessionStats {
   return {
@@ -199,6 +220,7 @@ function newSessionStats(): SessionStats {
     tokensOut: 0,
     turns: 0,
     transcript: [],
+    history: [],
   };
 }
 
@@ -568,6 +590,228 @@ async function dispatchCommand(
     console.log(`  → Now switch: /model ${prov}\n`);
     return;
   }
+  if (input.startsWith("/plan ")) {
+    if (!xo) return;
+    const goal = input.slice(6).trim();
+    if (goal.length === 0) {
+      throw new RecoverableCliError(
+        "Missing goal",
+        "Usage: /plan <goal> — shows the subtask plan without executing",
+      );
+    }
+    const committed = xo.committed();
+    if (!CREDENTIAL_LESS.has(committed.provider) && !committed.apiKey) {
+      throw new MissingApiKeyError(committed.provider);
+    }
+    const sp = spinner();
+    sp.start("plan: decomposing…");
+    const providerCfg = {
+      baseUrl: committed.baseUrl,
+      apiKey: committed.apiKey || "ollama",
+      model: committed.model,
+    };
+    try {
+      const plan = await planGoal({
+        goal,
+        provider: providerCfg,
+        maxSubtasks: MODES[currentMode].maxSubtasks,
+      });
+      sp.stop("plan ready");
+      console.log(section("plan"));
+      console.log(
+        `  ${dim(`source: ${plan.source} · ${plan.subtasks.length} subtask — esegui con /swarm <goal>`)}`,
+      );
+      for (const t of plan.subtasks) {
+        console.log(`  ${fire(t.id.padEnd(8))} ${t.goal}`);
+        for (const c of t.acceptanceCriteria) console.log(`        ${dim(`- ${c}`)}`);
+      }
+      console.log();
+    } catch (err: unknown) {
+      sp.stop(undefined, "plan failed");
+      throw err;
+    }
+    return;
+  }
+  if (input === "/cost") {
+    if (!xo) return;
+    const st = xo.stats;
+    console.log(section("cost"));
+    console.log(`  ${kv("tokens in", String(st.tokensIn))}`);
+    console.log(`  ${kv("tokens out", String(st.tokensOut))}`);
+    console.log(`  ${kv("total", String(st.tokensIn + st.tokensOut))}`);
+    console.log(`  ${kv("turns", String(st.turns))}`);
+    console.log(`  ${dim("token counts only — pricing depends on the active provider plan")}`);
+    console.log();
+    return;
+  }
+  if (input === "/export" || input.startsWith("/export ")) {
+    if (!xo) return;
+    const fmt = input.slice(7).trim() === "json" ? "json" : "md";
+    const file = path.join(
+      WORKSPACE,
+      `session-${new Date().toISOString().replace(/[:.]/g, "-")}.${fmt}`,
+    );
+    if (fmt === "json") {
+      const payload = {
+        date: new Date().toISOString(),
+        provider: xo.committed().provider,
+        model: xo.committed().model,
+        turns: xo.stats.turns,
+        tokens: { in: xo.stats.tokensIn, out: xo.stats.tokensOut },
+        transcript: xo.stats.transcript,
+      };
+      fs.writeFileSync(file, JSON.stringify(payload, null, 2), "utf-8");
+    } else {
+      const lines = [
+        "# Elysium session transcript",
+        "",
+        `- date: ${new Date().toISOString()}`,
+        `- provider: ${xo.committed().provider} (${xo.committed().model})`,
+        `- turns: ${xo.stats.turns}, tokens: ${xo.stats.tokensIn} in / ${xo.stats.tokensOut} out`,
+        "",
+      ];
+      for (const m of xo.stats.transcript) {
+        lines.push(m.role === "user" ? "## > user" : "## elysium", "", m.text, "");
+      }
+      fs.writeFileSync(file, lines.join("\n"), "utf-8");
+    }
+    console.log(`\n  ${marks.ok} Session exported: ${file}\n`);
+    return;
+  }
+  if (input === "/memory" || input.startsWith("/memory ")) {
+    const arg = input.slice(7).trim();
+    if (arg === "clear") {
+      clearMemory(PROJECT_ROOT);
+      console.log(`\n  ${marks.ok} Operator memory cleared.\n`);
+      return;
+    }
+    if (arg.length === 0) {
+      const entries = loadMemory(PROJECT_ROOT);
+      console.log(section("memory"));
+      if (entries.length === 0) {
+        console.log(`  ${dim("vuota — aggiungi con /memory <nota>")}`);
+      } else {
+        for (const e of entries) console.log(`  ${dim("-")} ${e}`);
+      }
+      console.log(
+        `\n  ${dim("iniettata nel system prompt · /memory <nota> aggiunge · /memory clear svuota")}\n`,
+      );
+      return;
+    }
+    const entries = addMemoryEntry(PROJECT_ROOT, arg);
+    console.log(
+      `\n  ${marks.ok} Nota salvata (${entries.length}/50). Sarà nel system prompt dai prossimi turni.\n`,
+    );
+    return;
+  }
+  if (input === "/mcp") {
+    const servers = readMcpConfig(PROJECT_ROOT);
+    const names = Object.keys(servers);
+    if (names.length === 0) {
+      console.log(`\n  No MCP servers configured. Add a .mcp.json in the project root:`);
+      console.log(
+        `  ${dim(`{ "mcpServers": { "nome": { "command": "npx", "args": ["-y", "pkg"] } } }`)}\n`,
+      );
+      return;
+    }
+    const sp = spinner();
+    sp.start(`mcp: probing ${names.length} server…`);
+    const results = await Promise.all(
+      names.map((n) => probeServer(n, servers[n] ?? { command: "" })),
+    );
+    sp.stop("mcp probe done");
+    console.log(section("mcp"));
+    for (const r of results) {
+      const icon = r.ok ? green(marks.ok) : red(marks.err);
+      const detail = r.ok
+        ? `${r.tools.length} tools${r.tools.length > 0 ? `: ${r.tools.slice(0, 5).join(", ")}` : ""}`
+        : (r.error ?? "failed");
+      console.log(`  ${icon} ${r.name.padEnd(14)} ${dim(detail)}`);
+    }
+    console.log();
+    return;
+  }
+  if (input === "/review" || input.startsWith("/review ")) {
+    if (!xo) return;
+    const target = input.slice(7).trim();
+    const committed = xo.committed();
+    if (!CREDENTIAL_LESS.has(committed.provider) && !committed.apiKey) {
+      throw new MissingApiKeyError(committed.provider);
+    }
+    const scope =
+      target.length > 0
+        ? `Limitati ai file sotto ${target}.`
+        : "Analizza il diff completo (staged + unstaged).";
+    const reviewPrompt = [
+      "Esegui una CODE REVIEW del repository corrente.",
+      scope,
+      "Passi: 1) raccogli il diff con bash (git diff HEAD + git diff --cached), 2) leggi i file toccati se serve contesto,",
+      "3) segnala: bug, rischi di sicurezza, violazioni delle convenzioni del repo, opportunità di semplificazione.",
+      "Formato: elenco puntato con file:line per ogni punto, gravità (high/med/low), suggerimento concreto.",
+      "Se il diff è vuoto, dillo e fermati. Niente modifiche ai file: solo analisi.",
+    ].join(" ");
+    const seam = (
+      globalThis as { __elysiumRunSeam?: { start(a: { abort(): void }): void; end(): void } }
+    ).__elysiumRunSeam;
+    const sp = thinkingSpinner();
+    activeSpinner = sp;
+    sp.start("");
+    liveStreamed = false;
+    inThink = false;
+    xo.stats.prompts.push(input);
+    seam?.start(xo.getAgent());
+    let result;
+    try {
+      result = await xo.getAgent().run(reviewPrompt);
+    } finally {
+      seam?.end();
+      activeSpinner?.stop();
+      activeSpinner = null;
+    }
+    if (liveStreamed) {
+      process.stdout.write("\n");
+    } else {
+      for (const m of result.messages) {
+        if (m.role === "assistant" && m.text) console.log(`\n${m.text}`);
+      }
+    }
+    xo.stats.tokensIn += result.usage.inputTokens;
+    xo.stats.tokensOut += result.usage.outputTokens;
+    xo.stats.turns += result.turns;
+    xo.stats.transcript.push({ role: "user", text: input });
+    console.log(
+      `  ${dim(`─ review done · ${result.usage.inputTokens + result.usage.outputTokens} tok · ${result.turns} turns`)}`,
+    );
+    return;
+  }
+  let currentThemeMode = currentTheme();
+  if (input === "/theme" || input.startsWith("/theme ")) {
+    const arg = input.slice(6).trim();
+    if (arg === "mono" || arg === "fire") {
+      setTheme(arg);
+      currentThemeMode = arg;
+      console.log(`\n  ${marks.ok} Theme: ${arg}${arg === "mono" ? " (brand accents off)" : ""}\n`);
+      return;
+    }
+    console.log(
+      `\n  Theme: ${currentThemeMode}  ${dim("· switch with /theme fire | /theme mono")}\n`,
+    );
+    return;
+  }
+  if (input === "/agents") {
+    if (!xo) return;
+    const st = xo.stats;
+    console.log(section("agents"));
+    console.log(`  ${kv("session turns", String(st.turns))}`);
+    console.log(
+      `  ${kv("history", `${st.history.length} messages (cap ${HISTORY_MAX_MESSAGES})`)}`,
+    );
+    console.log(
+      `  ${dim("live subagent panes: visible during /swarm runs — run /swarm <goal> and the view streams each builder")}`,
+    );
+    console.log();
+    return;
+  }
   if (input === "/connections") {
     console.log(`\n  Providers (configured in .env or via /key):`);
     for (const [name, url] of Object.entries(PROVIDER_URLS)) {
@@ -649,10 +893,13 @@ async function dispatchCommand(
     if (!xo) return;
     xo.setAgent(wireAgentFor(xo.committed(), registry));
     xo.stats.transcript.length = 0;
+    xo.stats.history.length = 0;
     xo.stats.turns = 0;
     xo.stats.tokensIn = 0;
     xo.stats.tokensOut = 0;
-    console.log(`\n  ${marks.ok} Conversation reset (fresh agent, stats zeroed).\n`);
+    console.log(
+      `\n  ${marks.ok} Conversation reset (fresh agent, history cleared, stats zeroed).\n`,
+    );
     return;
   }
   if (input === "/save") {
@@ -817,6 +1064,13 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
     output: process.stdout,
     prompt: `${fire("❯")} `,
     historySize: 100,
+    // Tab completion over the command catalog: prefixes match, empty prefix
+    // offers the full list (readline shows it above the prompt).
+    completer: (lineInput: string): [string[], string] => {
+      const names = HELP_CATALOG.map((e) => e.name);
+      const hits = names.filter((n) => n.startsWith(lineInput));
+      return [hits.length > 0 ? hits : names, lineInput];
+    },
   });
   rl.prompt();
 
@@ -1036,13 +1290,16 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
     inThink = false;
     let result;
     try {
-      result = await agent.run(line);
+      result = await agent.run(line, { history: xo.stats.history });
     } finally {
       seam?.end();
       xo.setWorking(false);
       activeSpinner?.stop();
       activeSpinner = null;
     }
+    // Carry the conversation forward (bounded): what the model saw and
+    // produced this turn feeds the next prompt's context.
+    xo.stats.history = [...result.messages, ...xo.stats.history].slice(0, HISTORY_MAX_MESSAGES);
     const dt = Date.now() - t0;
     if (liveStreamed) {
       // Deltas were already printed live; just close the block.

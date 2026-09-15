@@ -19,8 +19,33 @@ const COLORS_ENABLED =
   process.env.TERM !== "dumb" &&
   process.stdout.isTTY === true;
 
-function colorize(open: string, reset: string): Colorize {
-  return (s: string): string => (COLORS_ENABLED ? `\u001B[${open}m${s}\u001B[${reset}m` : s);
+/** Selectable UI theme: 'fire' (brand palette) or 'mono' (brand → plain). */
+export type Theme = "fire" | "mono";
+
+/** Module-level theme state; default 'fire'. */
+let activeTheme: Theme = "fire";
+
+/**
+ * Switch the UI theme. In 'mono' the BRAND colorizers render plain text;
+ * semantic status colors (green/yellow/red/dim/bold/white) are unchanged.
+ * The COLORS_ENABLED gate still wins: when colors are disabled everything
+ * stays plain regardless of theme.
+ */
+export function setTheme(theme: Theme): void {
+  activeTheme = theme;
+}
+
+/** Current theme (module-level state). */
+export function currentTheme(): Theme {
+  return activeTheme;
+}
+
+function colorize(open: string, reset: string, brand = false): Colorize {
+  return (s: string): string => {
+    if (!COLORS_ENABLED) return s;
+    if (brand && activeTheme === "mono") return s;
+    return `\u001B[${open}m${s}\u001B[${reset}m`;
+  };
 }
 
 // ── Semantic palette: every color HAS a role ──
@@ -33,23 +58,23 @@ function colorize(open: string, reset: string): Colorize {
 // magenta = special modes (swarm, agent-to-agent activity)
 export const dim = colorize("2", "22");
 export const bold = colorize("1", "22");
-export const cyan = colorize("36", "39");
+export const cyan = colorize("36", "39", true);
 export const green = colorize("32", "39");
 export const yellow = colorize("33", "39");
 export const red = colorize("31", "39");
-export const magenta = colorize("35", "39");
+export const magenta = colorize("35", "39", true);
 export const white = colorize("97", "39");
-export const blue = colorize("94", "39");
+export const blue = colorize("94", "39", true);
 
 // ── Fire palette (256-color brand accents — "rosso fuoco") ──
 // flame/amber/ember/fire/dRed go bright→deep; used for brand moments
 // (wordmark, section titles, prompt, pane headers). Semantic status colors
 // (green/yellow/red) stay untouched for pass/warn/fail meaning.
-export const fire = colorize("38;5;196", "39");
-export const ember = colorize("38;5;202", "39");
-export const amber = colorize("38;5;208", "39");
-export const flame = colorize("38;5;214", "39");
-export const dRed = colorize("38;5;88", "39");
+export const fire = colorize("38;5;196", "39", true);
+export const ember = colorize("38;5;202", "39", true);
+export const amber = colorize("38;5;208", "39", true);
+export const flame = colorize("38;5;214", "39", true);
+export const dRed = colorize("38;5;88", "39", true);
 
 /** Shadow-font glyphs (verified spelling) used by {@link fireWordmark}. */
 const SHADOW_LETTERS: Record<string, readonly string[]> = {
@@ -383,62 +408,63 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
     group: "Agent",
     maturity: "stable",
   },
-  // — In arrivo: la roadmap è visibile dentro la CLI —
+  // — Promosso a stabile: implementato —
   {
     name: "/plan",
     signature: "/plan <goal>",
-    description: "Genera il piano (subtask + contratti) prima di eseguire",
+    description: "Piano (subtask + criteria) senza eseguire",
     group: "Agent",
-    maturity: "planned",
-  },
-  {
-    name: "/agents",
-    signature: "/agents",
-    description: "Pannello subagent live, attach a un run in corso",
-    group: "Agent",
-    maturity: "planned",
+    maturity: "stable",
   },
   {
     name: "/review",
     signature: "/review [path]",
     description: "Code review guidata sul diff corrente",
     group: "Agent",
-    maturity: "planned",
+    maturity: "stable",
   },
   {
     name: "/cost",
     signature: "/cost",
-    description: "Token e stima costi per sessione e per run",
+    description: "Token di sessione (in/out/total)",
     group: "Sessione",
-    maturity: "planned",
+    maturity: "stable",
   },
   {
     name: "/memory",
-    signature: "/memory [show|clear]",
-    description: "Memoria di sessione persistente",
+    signature: "/memory [nota|clear]",
+    description: "Note operatore persistenti nel prompt",
     group: "Sessione",
-    maturity: "planned",
+    maturity: "stable",
   },
   {
     name: "/export",
     signature: "/export [md|json]",
-    description: "Export della sessione in formato pulito",
+    description: "Export della sessione",
     group: "Sessione",
-    maturity: "beta",
+    maturity: "stable",
   },
   {
     name: "/mcp",
     signature: "/mcp",
-    description: "Server MCP connessi e tool esposti",
+    description: "Server MCP da .mcp.json e loro tool",
     group: "Provider",
-    maturity: "planned",
+    maturity: "stable",
+  },
+  // — In arrivo: la roadmap è visibile dentro la CLI —
+  {
+    name: "/agents",
+    signature: "/agents",
+    description: "Stato subagent e cronologia conversazione",
+    group: "Agent",
+    maturity: "stable",
   },
   {
     name: "/theme",
     signature: "/theme [fire|mono]",
     description: "Palette della CLI",
     group: "REPL",
-    maturity: "planned",
+    maturity: "stable",
   },
 ];
 

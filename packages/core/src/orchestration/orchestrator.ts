@@ -41,9 +41,20 @@ export interface OrchestratorOptions {
   maxConcurrency?: number;
   /** When aborted, tasks that have not started yet fail with summary "aborted". */
   signal?: AbortSignal;
+  /**
+   * Optional per-spawn budget in milliseconds. When > 0, a spawn that has not
+   * settled within the budget is abandoned: an `error` event (scope "task") is
+   * emitted and a failed {@link SubagentResult} with summary `timeout after Ns`
+   * is returned in its place. Default 0 (timeout disabled). Rejections are
+   * still captured — a timeout never propagates rejections to the caller.
+   */
+  spawnTimeoutMs?: number;
   /** Telemetry sink receiving typed harness events for this run. */
   onEvent?: (event: HarnessEvent) => void;
 }
+
+/** Default per-spawn budget: 0 = timeout disabled. */
+const DEFAULT_SPAWN_TIMEOUT_MS = 0;
 
 const DEFAULT_REPAIR_ROUNDS = 1;
 const DEFAULT_MAX_CONCURRENCY = 4;
@@ -103,6 +114,7 @@ export class Orchestrator {
   private readonly repairRounds: number;
   private readonly maxConcurrency: number;
   private readonly signal?: AbortSignal;
+  private readonly spawnTimeoutMs: number;
   private readonly onEvent?: (event: HarnessEvent) => void;
 
   constructor(options: OrchestratorOptions) {
@@ -111,6 +123,7 @@ export class Orchestrator {
     this.repairRounds = Math.max(0, options.repairRounds ?? DEFAULT_REPAIR_ROUNDS);
     this.maxConcurrency = Math.max(1, options.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY);
     this.signal = options.signal;
+    this.spawnTimeoutMs = Math.max(0, options.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS);
     this.onEvent = options.onEvent;
   }
 
@@ -226,8 +239,53 @@ export class Orchestrator {
     return { task, result, critic: verdict };
   }
 
-  /** Spawn rejections are captured as failed results; they never crash the run. */
+  /**
+   * Spawn rejections are captured as failed results; they never crash the run.
+   * When {@link OrchestratorOptions.spawnTimeoutMs} is > 0, the spawn is raced
+   * against a timer: on expiry the attempt is abandoned with an `error` event
+   * and a failed result — no rejection ever propagates, and the (late) spawn
+   * outcome is simply ignored.
+   */
   private async spawnSafely(runId: string, task: SubagentTask): Promise<SubagentResult> {
+    const spawned = this.spawnWithRejectionCaptured(runId, task);
+    if (this.spawnTimeoutMs <= 0) {
+      return spawned;
+    }
+    const seconds = Math.round(this.spawnTimeoutMs / 100) / 10;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<SubagentResult>((resolve) => {
+      timer = setTimeout(() => {
+        const summary = `timeout after ${seconds}s`;
+        this.emit({
+          type: "error",
+          timestamp: nowIso(),
+          runId,
+          taskId: task.id,
+          data: { message: summary, scope: "task" },
+        });
+        resolve({
+          taskId: task.id,
+          status: "fail",
+          summary,
+          artifacts: [],
+        });
+      }, this.spawnTimeoutMs);
+    });
+    try {
+      return await Promise.race([spawned, timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /**
+   * Invokes the spawn seam with its rejection converted into a failed result,
+   * so `Promise.race` above never sees a rejected promise.
+   */
+  private async spawnWithRejectionCaptured(
+    runId: string,
+    task: SubagentTask,
+  ): Promise<SubagentResult> {
     try {
       return await this.spawn(task);
     } catch (error) {

@@ -25,15 +25,21 @@ function projectRoot(): string {
 }
 
 /** Run the CLI in mock mode with a scripted REPL session; return stdout+stderr. */
-function runReplSession(lines: string[], timeoutMs = 30000): { out: string; exitCode: number | null } {
+function runReplSession(
+  lines: string[],
+  timeoutMs = 30000,
+): { out: string; exitCode: number | null } {
   const root = projectRoot();
   const input = lines.join("\n") + "\n";
   try {
-    const stdout = execFileSync(
-      "pnpm",
-      ["agent", "--provider", "mock"],
-      { input, encoding: "utf-8", timeout: timeoutMs, cwd: root, env: { ...process.env }, shell: true },
-    );
+    const stdout = execFileSync("pnpm", ["agent", "--provider", "mock"], {
+      input,
+      encoding: "utf-8",
+      timeout: timeoutMs,
+      cwd: root,
+      env: { ...process.env },
+      shell: true,
+    });
     return { out: stdout, exitCode: 0 };
   } catch (err: unknown) {
     const e = err as { stdout?: string; status?: number };

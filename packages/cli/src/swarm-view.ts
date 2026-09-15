@@ -96,8 +96,29 @@ export interface SwarmView {
   critic(id: string, passed: boolean): void;
   repair(id: string, round: number): void;
   error(message: string): void;
+  /** Plain-data snapshot of the current swarm state (no ANSI). */
+  snapshot(): SwarmSnapshot;
   /** Stop the live loop; returns control of the output to the caller. */
   finish(): void;
+}
+
+/** One task row of a {@link SwarmSnapshot}: plain data, no ANSI codes. */
+export interface SwarmSnapshotTask {
+  id: string;
+  status: TaskStatus;
+  tools: number;
+  attempts: number;
+  /** Seconds since start; 0 if not started; frozen at end once ended. */
+  elapsedSec: number;
+  lastTool: string;
+}
+
+/** Plain-data view of the swarm state, safe for programmatic consumption. */
+export interface SwarmSnapshot {
+  goal: string;
+  running: number;
+  total: number;
+  tasks: SwarmSnapshotTask[];
 }
 
 /** Creates a swarm live view bound to the current stdout. */
@@ -319,6 +340,30 @@ export function createSwarmView(): SwarmView {
       }
       // Leave the last frame on screen; the caller prints the report after.
       frameRows = 0;
+    },
+    snapshot(): SwarmSnapshot {
+      const rows: SwarmSnapshotTask[] = order.map((id) => {
+        const t = tasks.get(id);
+        if (t === undefined) {
+          return { id, status: "queued", tools: 0, attempts: 1, elapsedSec: 0, lastTool: "" };
+        }
+        const elapsed =
+          t.startedAt === null ? 0 : Math.floor(((t.endedAt ?? Date.now()) - t.startedAt) / 1000);
+        return {
+          id,
+          status: t.status,
+          tools: t.tools,
+          attempts: t.attempts,
+          elapsedSec: Math.max(0, elapsed),
+          lastTool: t.lastTool,
+        };
+      });
+      return {
+        goal: goalText,
+        running: rows.filter((r) => r.status === "running" || r.status === "repair").length,
+        total: rows.length,
+        tasks: rows,
+      };
     },
   };
 }

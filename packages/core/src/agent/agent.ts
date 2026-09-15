@@ -148,7 +148,16 @@ export class Agent {
     this.#activeController?.abort();
   }
 
-  async run(prompt: string): Promise<TurnResult> {
+  /**
+   * Runs the agent loop for one prompt.
+   *
+   * When `options.history` is provided, those messages are COPIED and prepended
+   * to the conversation (the caller's array is never mutated), so the provider
+   * receives `[...history, userPrompt]`. Everything else is unchanged: `turns`
+   * and `usage` count only the turns executed by THIS run, and the per-turn
+   * request snapshot semantics stay intact.
+   */
+  async run(prompt: string, options?: { history?: AgentMessage[] }): Promise<TurnResult> {
     if (typeof prompt !== "string" || prompt.trim().length === 0) {
       throw new Error("prompt must be a non-empty string");
     }
@@ -172,7 +181,12 @@ export class Agent {
 
     // Single conversation array, grown in place and shared with the provider:
     // no per-turn copying. The request envelope is the per-turn snapshot.
-    const messages: AgentMessage[] = [{ role: "user", content: prompt }];
+    // Optional history is COPIED in (never aliased), prepended to the prompt.
+    const history = options?.history;
+    const messages: AgentMessage[] =
+      history === undefined
+        ? [{ role: "user", content: prompt }]
+        : [...history, { role: "user", content: prompt }];
     const usage: TokenUsage = { inputTokens: 0, outputTokens: 0 };
     let turns = 0;
     let stopReason: StopReason = "end_turn";

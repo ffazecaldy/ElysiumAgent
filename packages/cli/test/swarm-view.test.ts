@@ -3,7 +3,14 @@
  * glyphs, and the non-TTY linear output contract.
  */
 import { describe, expect, it } from "vitest";
-import { MAX_PANES, assignPanes, statusGlyph, truncate } from "../src/swarm-view";
+import {
+  MAX_PANES,
+  assignPanes,
+  createSwarmView,
+  statusGlyph,
+  truncate,
+  type SwarmSnapshot,
+} from "../src/swarm-view";
 
 describe("assignPanes", () => {
   it("caps the panes at MAX_PANES even with many tasks", () => {
@@ -66,5 +73,58 @@ describe("statusGlyph", () => {
     expect(statusGlyph("pass")).toBeDefined();
     // @ts-expect-error — runtime robustness for unknown statuses
     expect(statusGlyph("bogus")).toBeDefined();
+  });
+});
+
+describe("snapshot", () => {
+  it("reflects states, tools and elapsed after plan+start+tool+end", async () => {
+    const view = createSwarmView();
+    view.plan(
+      "obiettivo di prova",
+      [
+        { id: "task-1", goal: "primo" },
+        { id: "task-2", goal: "secondo" },
+      ],
+      "/tmp/ws",
+    );
+
+    // Before start: queued, no elapsed, no tools.
+    let snap: SwarmSnapshot = view.snapshot();
+    expect(snap.goal).toBe("obiettivo di prova");
+    expect(snap.total).toBe(2);
+    expect(snap.running).toBe(0);
+    expect(snap.tasks[0]).toMatchObject({
+      id: "task-1",
+      status: "queued",
+      tools: 0,
+      attempts: 1,
+      elapsedSec: 0,
+      lastTool: "",
+    });
+
+    view.taskStarted("task-1");
+    view.taskTool("task-1", "write", false);
+    view.taskTool("task-1", "bash", false);
+    await new Promise((r) => setTimeout(r, 1100)); // ensure elapsedSec >= 1
+
+    snap = view.snapshot();
+    expect(snap.running).toBe(1);
+    const running = snap.tasks.find((t) => t.id === "task-1");
+    expect(running).toMatchObject({ status: "running", tools: 2, lastTool: "bash" });
+    expect(running?.elapsedSec).toBeGreaterThanOrEqual(1);
+
+    view.taskEnded("task-1", "pass", 1500, 2);
+    snap = view.snapshot();
+    expect(snap.running).toBe(0);
+    const ended = snap.tasks.find((t) => t.id === "task-1");
+    expect(ended).toMatchObject({ status: "pass", tools: 2, attempts: 2, lastTool: "bash" });
+    // endedAt freezes elapsed at durationMs → 1s (floor of 1500/1000).
+    expect(ended?.elapsedSec).toBe(1);
+
+    const queued = snap.tasks.find((t) => t.id === "task-2");
+    expect(queued).toMatchObject({ status: "queued", elapsedSec: 0, lastTool: "" });
+
+    // Plain data: no ANSI escape codes anywhere in the snapshot.
+    expect(JSON.stringify(snap)).not.toContain("\\u001b");
   });
 });
