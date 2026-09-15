@@ -1,13 +1,11 @@
 ---
 name: living-dashboard
-description: Use when building living dashboards or animated landings.
+description: Create dark or light living interactive dashboards, product UIs and full storytelling landings that feel like organisms. Use for dashboards, metrics UIs, model intelligence pages, cybernetic interfaces, animated product landings, PropTech/FinTech sites, or any request for reactive cursor, magnetic cards, breathing elements, ambient light and presence. Also trigger on full living animation levels or organic micro-interactions.
 ---
 
 # Living Dashboard
 
 Build polished single-file HTML experiences that feel alive — breathing, reactive to the cursor, with magnetic cards, ambient light, and restrained high-end motion. Supports both compact operational dashboards and long-form product storytelling landings (the style that produced high-quality results like METRIA).
-
-**Triggers**: dark/light interactive dashboards, product UIs, metrics UIs, model intelligence pages, cybernetic interfaces, animated product landings, PropTech/FinTech sites, reactive cursor, magnetic cards, breathing elements, ambient light, presence, organic micro-interactions, "full living animation levels".
 
 ## Required Intake (Always Ask First)
 
@@ -64,7 +62,7 @@ If the user already gave a dense brief (as in the METRIA example), map it to the
 
 - Deliver **one self-contained .html file** (no build step, no external CSS/JS beyond Google Fonts).
 - Prefer fonts: Inter + Instrument Serif + JetBrains Mono / DM Mono (or close equivalents already proven in high-quality results).
-- Write the file to the workspace artifacts dir unless the user specifies otherwise.
+- Write the file to /home/workdir/artifacts/ unless the user specifies otherwise.
 - After generating, give a short summary of theme, animation level and key modules included.
 
 ## Design Inspiration & Anti-Slop (Critical)
