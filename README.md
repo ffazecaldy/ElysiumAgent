@@ -123,6 +123,7 @@ For live judging, swap in `createLlmJudge(provider)`.
 | `/save` | Save the current session to a JSONL file under `.elysium/sessions/` |
 | `/mode [min\|medium\|high\|max]` | Set the effort mode for this session; `/mode` alone shows the active one (see [Effort modes](#effort-modes)) |
 | `/swarm <goal>` | Run the goal in Swarmloop mode (see below) |
+| `/skills` | List indexed skills (from `skills/` dirs or `ELYSIUM_SKILLS_DIR`) |
 | `/quit` | Exit cleanly |
 
 **Streaming output**: assistant text arrives live, token by token, as the provider streams it — no waiting for the full turn.

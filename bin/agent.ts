@@ -76,6 +76,7 @@ import {
   translateProviderError,
 } from "./ui";
 import { runSwarmGoal, type SwarmEvent } from "../packages/cli/src/swarm-mode";
+import { collectSkills, skillRoots, skillsPromptBlock } from "../packages/cli/src/skills";
 
 /**
  * PROJECT_ROOT governs where .env is read/written. The ELYSIUM_PROJECT_ROOT
@@ -98,6 +99,14 @@ const SYSTEM_PROMPT =
   "Create or modify files ONLY when the user explicitly asks to create/modify/write something. " +
   "When the task is done, stop: do not volunteer extra features, follow-ups, or improvements. " +
   "Be concise and direct. State what you did in one line only if you used tools.";
+
+// ── Skills: startup index, read on demand via the builtin `read` tool ──
+// The loader only builds a lightweight index (name + description + path)
+// from skills/ directories; the full SKILL.md content is pulled by the
+// agent through the existing `read` tool only when a task matches. No new
+// tool, no core change, no background work.
+const SKILLS = collectSkills(skillRoots(PROJECT_ROOT));
+const SKILLS_PROMPT_BLOCK = skillsPromptBlock(SKILLS);
 
 // ── Effort modes (/mode) ──────────────────────────────────────────
 
@@ -160,9 +169,9 @@ const MODES: Record<Mode, ModeConfig> = {
 /** Active effort mode. Session-only: nothing here is written to .env. */
 let currentMode: Mode = "medium";
 
-/** System prompt for the current mode: base prompt + the mode's suffix. */
+/** System prompt for the current mode: base prompt + skills index + the mode's suffix. */
 function systemPromptForMode(): string {
-  return SYSTEM_PROMPT + MODES[currentMode].systemPromptSuffix;
+  return SYSTEM_PROMPT + SKILLS_PROMPT_BLOCK + MODES[currentMode].systemPromptSuffix;
 }
 
 // ── Session stats (for /status /history /save) ────────────────────
@@ -419,6 +428,7 @@ async function dispatchCommand(
 
   ${cyan("Agent")}
     /swarm <goal>           Gauntlet mode: plan -> builders -> critic -> repair
+    /skills                 List indexed skills
     /tools                  List tools
     /workspace              Show workspace path
 
@@ -538,6 +548,21 @@ async function dispatchCommand(
       console.log(`    ${name.padEnd(12)} ${String(PROVIDER_NAMES[name]).padEnd(16)} ${url.padEnd(40)} ${configured}`);
     }
     console.log();
+    return;
+  }
+  if (input === "/skills") {
+    if (SKILLS.length === 0) {
+      console.log(`\n  No skills indexed. Add a directory with a SKILL.md (frontmatter: name, description) under one of:`);
+      for (const root of skillRoots(PROJECT_ROOT)) console.log(`    ${root}`);
+      console.log();
+      return;
+    }
+    console.log(section("skills"));
+    for (const s of SKILLS) {
+      console.log(`  ${cyan(s.name)}  ${dim(s.description)}`);
+      console.log(`    ${dim(s.file)}`);
+    }
+    console.log(`\n  ${dim("The agent reads a skill's SKILL.md with the read tool when the task matches.")}\n`);
     return;
   }
   if (input === "/tools") {
@@ -691,6 +716,9 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   console.log(kv("artifacts", WORKSPACE));
   console.log(kv("mode", MODES[currentMode].label));
   console.log(kv("tools", "read write edit bash"));
+  console.log(
+    kv("skills", SKILLS.length > 0 ? SKILLS.map((s) => s.name).join(", ") : "(none — add dirs under skills/)"),
+  );
   console.log(`  ${dim("Type /help for commands. Ctrl+C aborts a run; twice to quit.\n")}`);
 
   const rl = readline.createInterface({

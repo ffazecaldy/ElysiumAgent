@@ -13,5 +13,7 @@ export type { ProviderConfig, ProviderName } from "./config";
 export { runDemo, runOrchestrate, runTask } from "./commands";
 export { runSwarmGoal } from "./swarm-mode";
 export type { RunSwarmGoalOptions, SwarmEvent, SwarmGoalReport } from "./swarm-mode";
+export { collectSkills, skillRoots, skillsPromptBlock } from "./skills";
+export type { SkillEntry } from "./skills";
 
 export const CLI_VERSION = "0.1.0";
