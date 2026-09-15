@@ -78,6 +78,7 @@ import {
   fire,
   welcomeScreen,
   statusBar,
+  helpScreen,
 } from "../packages/cli/src/ui";
 import { CLI_VERSION } from "../packages/cli/src/index";
 import { runSwarmGoal, type SwarmEvent } from "../packages/cli/src/swarm-mode";
@@ -443,33 +444,9 @@ async function dispatchCommand(
   xo?: { stats: SessionStats; setAgent: (a: Agent) => void; committed: () => ProviderConfig },
 ): Promise<void> {
   // /quit and /clear are handled by the caller (process-level).
-  if (input === "/help") {
-    console.log(`
-  ${cyan("Session")}
-    /status                 Provider, model, tokens, uptime
-    /mode [min|medium|high|max]  Effort mode (default medium)
-    /history                Prompts from this session
-    /save                   Write transcript as markdown to the workspace
-    /clear-chat             Reset conversation (fresh agent)
-
-  ${cyan("Providers")}
-    /model                  Show current provider and model
-    /model <provider>       Switch (openai | deepseek | groq | together | openrouter | glm | opencode | ollama | mock)
-    /model <provider> <m>   Switch provider and model
-    /connections            Provider status table
-    /key <provider> <key>   Set API key (>= 8 chars, saved to .env, never echoed fully)
-
-  ${cyan("Agent")}
-    /swarm <goal>           Gauntlet mode: plan -> builders -> critic -> repair
-    /skills                 List indexed skills
-    /tools                  List tools
-    /workspace              Show workspace path
-
-  ${cyan("REPL")}
-    /clear                  Clear screen
-    /help                   This help
-    /quit                   Exit
-`);
+  if (input === "/help" || input.startsWith("/help ")) {
+    const query = input.slice(5).trim();
+    console.log(helpScreen(query));
     return;
   }
   if (input === "/model") {

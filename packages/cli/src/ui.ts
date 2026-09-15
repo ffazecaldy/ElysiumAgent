@@ -51,29 +51,39 @@ export const amber = colorize("38;5;208", "39");
 export const flame = colorize("38;5;214", "39");
 export const dRed = colorize("38;5;88", "39");
 
-/** Fire wordmark rows for "ELYSIUM" (ANSI-shadow style), bright→deep. */
-const FIRE_MARK_ROWS: readonly string[] = [
-  "███████╗██╗  ██╗██╗   ██╗███████╗██╗██╗   ██╗███╗   ███╗",
-  "██╔════╝╚██╗██╔╝╚██╗ ██╔╝██╔════╝██║██║   ██║████╗ ████║",
-  "█████╗   ╚███╔╝  ╚████╔╝ █████╗  ██║██║   ██║██╔████╔██║",
-  "██╔══╝   ██╔██╗   ╚██╔╝  ██╔══╝  ██║██║   ██║██║╚██╔╝██║",
-  "███████╗██╔╝ ██╗   ██║   ███████╗██║╚██████╔╝██║ ╚═╝ ██║",
-  "╚══════╝╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝ ╚═════╝ ╚═╝     ╚═╝",
-];
+/** Shadow-font glyphs (verified spelling) used by {@link fireWordmark}. */
+const SHADOW_LETTERS: Record<string, readonly string[]> = {
+  E: ["███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "███████╗", "╚══════╝"],
+  L: ["██╗     ", "██║     ", "██║     ", "██║     ", "███████╗", "╚══════╝"],
+  Y: ["██╗   ██╗", "╚██╗ ██╔╝", " ╚████╔╝ ", "  ╚██╔╝  ", "   ██║   ", "   ╚═╝   "],
+  S: ["███████╗", "██╔════╝", "███████╗", "╚════██║", "███████║", "╚══════╝"],
+  I: ["██╗", "██║", "██║", "██║", "██║", "╚═╝"],
+  U: ["██╗   ██╗", "██║   ██║", "██║   ██║", "██║   ██║", "╚██████╔╝", " ╚═════╝ "],
+  M: ["███╗   ███╗", "████╗ ████║", "██╔████╔██║", "██║╚██╔╝██║", "██║ ╚═╝ ██║", "╚═╝     ╚═╝"],
+};
 const FIRE_MARK_COLORS: readonly Colorize[] = [flame, amber, ember, fire, fire, dRed];
 
-/** Blocky torch emblem for the welcome box left column (no backslashes). */
-const FLAME_ART_ROWS: readonly string[] = [
-  "   ▄█▄",
-  "  ▀███▀",
-  "   ███",
-  "  ▄███▄",
-  " ▄█████▄",
-  "██▀███▀██",
-  "   ███",
-  "  ▄█ █▄",
+/** Renders `text` as ANSI-shadow rows with the fire gradient. */
+export function fireWordmark(text: string): string[] {
+  const rows = ["", "", "", "", "", ""];
+  for (const ch of text.toUpperCase()) {
+    const glyph = SHADOW_LETTERS[ch];
+    if (glyph === undefined) continue;
+    for (let i = 0; i < 6; i += 1) rows[i] += `${glyph[i] ?? ""} `;
+  }
+  return rows.map((r, i) => FIRE_MARK_COLORS[i]?.(r.trimEnd()) ?? r);
+}
+
+/** Orbit emblem: burning core + orbit ring + satellites (brand motif of the thinking spinner). */
+const ORBIT_ART_ROWS: readonly string[] = [
+  "   ╭───╮   ",
+  " ╭─┤ █ ├─╮ ",
+  "│  ╰───╯  │",
+  "│ ·     ● │",
+  " ╰─┤   ├─╯ ",
+  "   ╰───╯   ",
 ];
-const FLAME_ART_COLORS: readonly Colorize[] = [flame, amber, ember, fire, ember, amber, fire, dRed];
+const ORBIT_ART_COLORS: readonly Colorize[] = [flame, amber, ember, fire, ember, dRed];
 
 /** Typographic status markers — no emoji, greppable, color-independent. */
 export const marks = {
@@ -182,8 +192,8 @@ export function welcomeScreen(info: WelcomeInfo): string {
     `  ${dim(`${info.tools.length} tools · ${info.skills.length} skills · /help for commands`)}`,
   );
 
-  // Left column: torch art top, model/session bottom.
-  const leftTop = FLAME_ART_ROWS.map((row, i) => FLAME_ART_COLORS[i]?.(row) ?? row);
+  // Left column: orbit emblem top, model/session bottom.
+  const leftTop = ORBIT_ART_ROWS.map((rowTxt, i) => ORBIT_ART_COLORS[i]?.(rowTxt) ?? rowTxt);
   const leftBottom = [
     dim(truncatePlain(info.model, leftW - 1)),
     dim(info.session.slice(0, leftW - 1)),
@@ -199,7 +209,7 @@ export function welcomeScreen(info: WelcomeInfo): string {
   const topTitle = `╭─ ${bold(flame(`Elysium Harness v${info.version}`))} `;
   const topRest = Math.max(0, inner + 2 - stripAnsi(topTitle).length);
   return [
-    ...FIRE_MARK_ROWS.map((row2, i) => FIRE_MARK_COLORS[i]?.(row2) ?? row2),
+    ...fireWordmark("ELYSIUM"),
     "",
     `${topTitle}${dim("─".repeat(topRest))}╮`,
     ...Array.from({ length: rowLines }, (_, i) => row(leftAll[i] ?? "", right[i] ?? "")),
@@ -257,7 +267,225 @@ export function box(title: string, subtitle = ""): string {
   ].join("\n");
 }
 
-// ── Spinner ───────────────────────────────────────────────────────
+// ── Dynamic help ──────────────────────────────────────────────────
+
+/** One help entry: name, signature, one-line description, maturity. */
+export interface HelpEntry {
+  name: string;
+  signature: string;
+  description: string;
+  group: string;
+  maturity: "stable" | "beta" | "planned";
+}
+
+/**
+ * Single source of truth for `/help` (and for future command registration):
+ * stable commands are rendered grouped, `planned` ones land in "In arrivo"
+ * so the roadmap is discoverable from the CLI itself.
+ */
+export const HELP_CATALOG: readonly HelpEntry[] = [
+  {
+    name: "/help",
+    signature: "/help [parola]",
+    description: "Questo help — filtra per parola",
+    group: "REPL",
+    maturity: "stable",
+  },
+  {
+    name: "/clear",
+    signature: "/clear",
+    description: "Pulisci lo schermo",
+    group: "REPL",
+    maturity: "stable",
+  },
+  { name: "/quit", signature: "/quit", description: "Esci", group: "REPL", maturity: "stable" },
+  {
+    name: "/status",
+    signature: "/status",
+    description: "Provider, modello, token, uptime",
+    group: "Sessione",
+    maturity: "stable",
+  },
+  {
+    name: "/mode",
+    signature: "/mode [min|medium|high|max]",
+    description: "Intensità di effort (default medium)",
+    group: "Sessione",
+    maturity: "stable",
+  },
+  {
+    name: "/history",
+    signature: "/history",
+    description: "Prompt di questa sessione",
+    group: "Sessione",
+    maturity: "stable",
+  },
+  {
+    name: "/save",
+    signature: "/save",
+    description: "Transcript markdown nel workspace",
+    group: "Sessione",
+    maturity: "stable",
+  },
+  {
+    name: "/clear-chat",
+    signature: "/clear-chat",
+    description: "Resetta la conversazione",
+    group: "Sessione",
+    maturity: "stable",
+  },
+  {
+    name: "/model",
+    signature: "/model [provider] [model]",
+    description: "Mostra o cambia provider/modello",
+    group: "Provider",
+    maturity: "stable",
+  },
+  {
+    name: "/key",
+    signature: "/key <provider> <key>",
+    description: "Salva una API key in .env",
+    group: "Provider",
+    maturity: "stable",
+  },
+  {
+    name: "/connections",
+    signature: "/connections",
+    description: "Tabella stato provider",
+    group: "Provider",
+    maturity: "stable",
+  },
+  {
+    name: "/swarm",
+    signature: "/swarm <goal>",
+    description: "Gauntlet multi-agente con vista live",
+    group: "Agent",
+    maturity: "stable",
+  },
+  {
+    name: "/skills",
+    signature: "/skills",
+    description: "Skill indicizzate nel prompt",
+    group: "Agent",
+    maturity: "stable",
+  },
+  {
+    name: "/tools",
+    signature: "/tools",
+    description: "Tool registrati",
+    group: "Agent",
+    maturity: "stable",
+  },
+  {
+    name: "/workspace",
+    signature: "/workspace",
+    description: "Percorso del workspace",
+    group: "Agent",
+    maturity: "stable",
+  },
+  // — In arrivo: la roadmap è visibile dentro la CLI —
+  {
+    name: "/plan",
+    signature: "/plan <goal>",
+    description: "Genera il piano (subtask + contratti) prima di eseguire",
+    group: "Agent",
+    maturity: "planned",
+  },
+  {
+    name: "/agents",
+    signature: "/agents",
+    description: "Pannello subagent live, attach a un run in corso",
+    group: "Agent",
+    maturity: "planned",
+  },
+  {
+    name: "/review",
+    signature: "/review [path]",
+    description: "Code review guidata sul diff corrente",
+    group: "Agent",
+    maturity: "planned",
+  },
+  {
+    name: "/cost",
+    signature: "/cost",
+    description: "Token e stima costi per sessione e per run",
+    group: "Sessione",
+    maturity: "planned",
+  },
+  {
+    name: "/memory",
+    signature: "/memory [show|clear]",
+    description: "Memoria di sessione persistente",
+    group: "Sessione",
+    maturity: "planned",
+  },
+  {
+    name: "/export",
+    signature: "/export [md|json]",
+    description: "Export della sessione in formato pulito",
+    group: "Sessione",
+    maturity: "beta",
+  },
+  {
+    name: "/mcp",
+    signature: "/mcp",
+    description: "Server MCP connessi e tool esposti",
+    group: "Provider",
+    maturity: "planned",
+  },
+  {
+    name: "/theme",
+    signature: "/theme [fire|mono]",
+    description: "Palette della CLI",
+    group: "REPL",
+    maturity: "planned",
+  },
+];
+
+/**
+ * Dynamic help screen: `query` (optional) filters by substring on
+ * name+description. Stable commands grouped by section; planned ones in
+ * "In arrivo" with a progress glyph. Deterministic in non-TTY too.
+ */
+export function helpScreen(query: string): string {
+  const q = query.trim().toLowerCase();
+  const match = (e: HelpEntry): boolean =>
+    q.length === 0 ||
+    e.name.includes(q) ||
+    e.description.toLowerCase().includes(q) ||
+    e.group.toLowerCase().includes(q);
+  const lines: string[] = [];
+  const stable = HELP_CATALOG.filter((e) => e.maturity !== "planned" && match(e));
+  const planned = HELP_CATALOG.filter((e) => e.maturity === "planned" && match(e));
+  lines.push(q.length > 0 ? `\n  ${amber(`help — filtro: "${q}"`)}` : `\n  ${amber("COMANDI")}`);
+  if (stable.length === 0 && planned.length === 0) {
+    lines.push(`  ${dim("nessun comando matcha — prova un'altra parola")}`);
+    return lines.join("\n");
+  }
+  const groups = [...new Set(stable.map((e) => e.group))];
+  for (const g of groups) {
+    lines.push(`\n  ${bold(flame(g))}`);
+    for (const e of stable.filter((x) => x.group === g)) {
+      const args = e.signature.startsWith(e.name)
+        ? e.signature.slice(e.name.length).trim()
+        : e.signature;
+      lines.push(`    ${fire(e.name.padEnd(12))} ${dim(args.padEnd(26))}${e.description}`);
+    }
+  }
+  if (planned.length > 0) {
+    lines.push(`\n  ${bold(amber("IN ARRIVO"))}  ${dim("survey in corso — quale vuoi prima?")}`);
+    for (const e of planned) {
+      const args = e.signature.startsWith(e.name)
+        ? e.signature.slice(e.name.length).trim()
+        : e.signature;
+      lines.push(
+        `    ${dim("··")} ${dim(e.name.padEnd(12))} ${dim(args.padEnd(26))}${dim(e.description)}`,
+      );
+    }
+  }
+  lines.push("");
+  return lines.join("\n");
+}
 
 /** Thinking spinner: orbiting dot around a center dot (thinking = orbit). */
 const THINKING_FRAMES: readonly string[] = [
