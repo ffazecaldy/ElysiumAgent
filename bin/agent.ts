@@ -83,6 +83,7 @@ import {
   HELP_CATALOG,
   setTheme,
   currentTheme,
+  playRainIntro,
 } from "../packages/cli/src/ui";
 import { CLI_VERSION } from "../packages/cli/src/index";
 import { runSwarmGoal, planGoal, type SwarmEvent } from "../packages/cli/src/swarm-mode";
@@ -1044,6 +1045,9 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   const state: ReplState = { config: startConfig, committed: startConfig };
   let agent = wireAgentFor(state.committed, registry, { stats });
 
+  // Matrix moment: falling 0/1 columns (TTY only, ~1.1s, ELYSIUM_RAIN_MS=0
+  // to skip) — then the wordmark + welcome box print below it.
+  await playRainIntro();
   console.log(
     welcomeScreen({
       version: CLI_VERSION,

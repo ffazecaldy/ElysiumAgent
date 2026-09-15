@@ -99,16 +99,85 @@ function renderWordmark(text: string): string[] {
   return rows.map((r, i) => WORDMARK_COLORS[i]?.(r.trimEnd()) ?? r);
 }
 
-/** Orbit emblem: glowing core + orbit ring + satellites (brand motif of the thinking spinner). */
-const ORBIT_ART_ROWS: readonly string[] = [
-  "   ╭───╮   ",
-  " ╭─┤ █ ├─╮ ",
-  "│  ╰───╯  │",
-  "│ ·     ● │",
-  " ╰─┤   ├─╯ ",
-  "   ╰───╯   ",
+/** Binary-rain art (static) shown in the welcome box left column. */
+const BINARY_ART_ROWS: readonly string[] = [
+  "1 0 1 1 0 1",
+  "0 1 0 0 1 0",
+  "1 1 0 1 0 0",
+  "0 0 1 0 1 1",
+  "1 0 1 0 0 1",
+  "0 1 0 1 1 0",
+  "1 0 0 1 0 1",
+  "0 1 1 0 1 0",
 ];
-const ORBIT_ART_COLORS: readonly Colorize[] = [neon, lime, moss, pine, moss, dGreen];
+const BINARY_ART_COLORS: readonly Colorize[] = [neon, pine, lime, moss, neon, pine, lime, dGreen];
+
+/**
+ * Digital rain intro: a small block of falling 0/1 columns played once at
+ * startup ("matrix" style), in place, then cleared so the welcome screen
+ * prints cleanly below the wordmark. TTY-only and skipped entirely when
+ * ELYSIUM_RAIN_MS=0. Resolves when the block is cleared.
+ */
+export function playRainIntro(opts: { rows?: number; ms?: number } = {}): Promise<void> {
+  return new Promise((resolve) => {
+    if (!COLORS_ENABLED) {
+      resolve();
+      return;
+    }
+    const envMs = Number(process.env.ELYSIUM_RAIN_MS);
+    const ms =
+      process.env.ELYSIUM_RAIN_MS === "0"
+        ? 0
+        : Math.max(250, Number.isFinite(envMs) && envMs > 0 ? envMs : (opts.ms ?? 1100));
+    if (ms <= 0) {
+      resolve();
+      return;
+    }
+    const rows = Math.max(4, opts.rows ?? 8);
+    const cols = 6;
+    const speeds = [1, 2, 1, 3, 2, 1];
+    const offsets = [0, 4, 8, 2, 6, 10];
+    let tick = 0;
+    let painted = 0;
+    let timer: NodeJS.Timeout | null = null;
+    const bit = (): string => (Math.random() < 0.5 ? "0" : "1");
+
+    const clearBlock = (): string => (painted > 0 ? `\u001B[${painted}A\r\u001B[J` : "");
+
+    const render = (): void => {
+      let out = painted > 0 ? `\u001B[${painted}A\r` : "";
+      for (let r = 0; r < rows; r += 1) {
+        let line = " ";
+        for (let c = 0; c < cols; c += 1) {
+          const head = ((offsets[c] ?? 0) + tick * (speeds[c] ?? 1)) % (rows + 3);
+          const delta = head - r;
+          let cell = "  ";
+          if (delta === 0) cell = `${neon(bit())} `;
+          else if (delta === 1) cell = `${lime(bit())} `;
+          else if (delta === 2) cell = `${moss(bit())} `;
+          else if (delta > 2 && delta < 5) cell = `${dGreen(bit())} `;
+          line += cell;
+        }
+        out += `\u001B[K${line.trimEnd()}\n`;
+      }
+      painted = rows;
+      process.stdout.write(out);
+    };
+
+    render();
+    timer = setInterval(() => {
+      tick += 1;
+      render();
+      if (tick * 70 >= ms) {
+        if (timer !== null) clearInterval(timer);
+        timer = null;
+        process.stdout.write(clearBlock());
+        resolve();
+      }
+    }, 70);
+    timer.unref();
+  });
+}
 
 /** Typographic status markers — no emoji, greppable, color-independent. */
 export const marks = {
@@ -217,8 +286,8 @@ export function welcomeScreen(info: WelcomeInfo): string {
     `  ${dim(`${info.tools.length} tools · ${info.skills.length} skills · /help for commands`)}`,
   );
 
-  // Left column: orbit emblem top, model/session bottom.
-  const leftTop = ORBIT_ART_ROWS.map((rowTxt, i) => ORBIT_ART_COLORS[i]?.(rowTxt) ?? rowTxt);
+  // Left column: binary rain art top, model/session bottom.
+  const leftTop = BINARY_ART_ROWS.map((rowTxt, i) => BINARY_ART_COLORS[i]?.(rowTxt) ?? rowTxt);
   const leftBottom = [
     dim(truncatePlain(info.model, leftW - 1)),
     dim(info.session.slice(0, leftW - 1)),
