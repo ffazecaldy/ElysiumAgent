@@ -77,8 +77,9 @@ import {
   thinkingSpinner,
   magenta,
   translateProviderError,
-} from "./ui";
+} from "../packages/cli/src/ui";
 import { runSwarmGoal, type SwarmEvent } from "../packages/cli/src/swarm-mode";
+import { createSwarmView, type SwarmView } from "../packages/cli/src/swarm-view";
 import { collectSkills, skillRoots, skillsPromptBlock } from "../packages/cli/src/skills";
 
 /**
@@ -721,6 +722,8 @@ async function dispatchCommand(
       apiKey: committed.apiKey || "ollama",
       model: committed.model,
     };
+    let view: SwarmView | null = null;
+    let planned = false;
     try {
       const report = await runSwarmGoal({
         goal,
@@ -730,32 +733,46 @@ async function dispatchCommand(
         onEvent: (e: SwarmEvent) => {
           if (e.type === "plan") {
             sp.stop("plan ready");
-            const tasks =
-              (e.data as { subtasks?: Array<{ id: string; goal: string }> }).subtasks ?? [];
-            console.log(`  ${cyan("plan")}`);
-            for (const t of tasks) console.log(`    ${dim(t.id)}  ${t.goal}`);
-            console.log();
-            sp.start("swarm: executing subtasks…");
+            planned = true;
+            const d = e.data as {
+              subtasks?: Array<{ id: string; goal: string }>;
+              workspacePath?: string;
+            };
+            view = createSwarmView();
+            view.plan(goal, d.subtasks ?? [], d.workspacePath ?? "");
           } else if (e.type === "task_started") {
-            console.log(`  ${marks.run} start ${(e.data as { taskId?: string }).taskId ?? ""}`);
+            view?.taskStarted((e.data as { taskId?: string }).taskId ?? "");
+          } else if (e.type === "task_output") {
+            const d = e.data as { taskId?: string; text?: string };
+            if (d.taskId !== undefined && d.text !== undefined) view?.taskOutput(d.taskId, d.text);
+          } else if (e.type === "task_tool") {
+            const d = e.data as { taskId?: string; tool?: string; isError?: boolean };
+            if (d.taskId !== undefined && d.tool !== undefined) {
+              view?.taskTool(d.taskId, d.tool, d.isError === true);
+            }
           } else if (e.type === "task_ended") {
-            const d = e.data as { taskId?: string; status?: string };
-            const icon = d.status === "pass" ? green(marks.ok) : red(marks.err);
-            console.log(`  ${icon} ${d.taskId ?? ""} ${dim(d.status ?? "")}`);
+            const d = e.data as {
+              taskId?: string;
+              status?: string;
+              durationMs?: number;
+              attempts?: number;
+            };
+            view?.taskEnded(d.taskId ?? "", d.status ?? "fail", d.durationMs ?? 0, d.attempts ?? 1);
           } else if (e.type === "critic") {
-            const d = e.data as { taskId?: string; passed?: boolean };
-            console.log(
-              `  ${d.passed ? green(marks.ok) : yellow(marks.warn)} critic ${d.taskId ?? ""} ${d.passed ? "passed" : "repair scheduled"}`,
-            );
+            const d = e.data as { taskId?: string; passed?: boolean; phase?: string };
+            if (d.phase !== "start") view?.critic(d.taskId ?? "", d.passed === true);
           } else if (e.type === "repair") {
-            console.log(
-              `  ${yellow(marks.warn)} repair ${(e.data as { taskId?: string }).taskId ?? ""}`,
-            );
+            const d = e.data as { taskId?: string; round?: number };
+            view?.repair(d.taskId ?? "", d.round ?? 1);
+          } else if (e.type === "error") {
+            const d = e.data as { message?: string };
+            if (d.message !== undefined) view?.error(d.message);
           }
         },
       });
-      sp.stop("swarm complete");
-      console.log(`\n  ${section("report")}`);
+      view?.finish();
+      console.log(`\n  ${green(marks.ok)} swarm complete`);
+      console.log(`  ${section("report")}`);
       console.log(
         `  ${report.allPassed ? green("all subtasks passed") : yellow("completed with failures")}`,
       );
@@ -770,14 +787,15 @@ async function dispatchCommand(
       }
       console.log(`\n  ${dim("workspace: " + report.workspacePath)}\n`);
     } catch (err: unknown) {
+      view?.finish();
       if (controller.signal.aborted) {
         // User-initiated cancellation (SIGINT/Esc via the run seam): a
         // cancelled swarm is not an error — settle quietly and return.
-        sp.stop(undefined, "swarm cancelled");
+        if (!planned) sp.stop(undefined, "swarm cancelled");
         console.log(`\n  ${yellow(marks.warn)} Generation cancelled (Ctrl+C)\n`);
         return;
       }
-      sp.stop(undefined, "swarm failed");
+      if (!planned) sp.stop(undefined, "swarm failed");
       throw err;
     } finally {
       runSeam?.end();

@@ -1,5 +1,5 @@
 /**
- * bin/ui.ts — zero-dependency ANSI theme for the Elysium CLI.
+ * packages/cli/src/ui.ts — zero-dependency ANSI theme for the Elysium CLI.
  *
  * Design language: minimal professional terminal UI (Claude Code / Aider
  * school) — restrained color, typographic hierarchy, NO decorative emoji.
