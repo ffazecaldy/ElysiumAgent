@@ -207,9 +207,13 @@ export class Orchestrator {
       return { task, result: abortedResult(task.id) };
     }
     /** Records an evidence entry and mirrors it as a `custom` bus event. */
-    const recordEvidence = (kind: EvidenceKind, summary: string, data?: {
-      [key: string]: unknown;
-    }): void => {
+    const recordEvidence = (
+      kind: EvidenceKind,
+      summary: string,
+      data?: {
+        [key: string]: unknown;
+      },
+    ): void => {
       const entry = this.evidence?.add(kind, task.id, summary, data);
       if (entry === undefined) {
         return;
@@ -244,11 +248,10 @@ export class Orchestrator {
     const priorCauses: FailureCause[][] = [];
     if (this.critic !== undefined) {
       verdict = await this.runCritic(this.critic, runId, attemptTask, result);
-      recordEvidence(
-        "critic",
-        `critic verdict round 1: ${verdict.passed ? "pass" : "fail"}`,
-        { passed: verdict.passed, gaps: verdict.gaps },
-      );
+      recordEvidence("critic", `critic verdict round 1: ${verdict.passed ? "pass" : "fail"}`, {
+        passed: verdict.passed,
+        gaps: verdict.gaps,
+      });
       for (let round = 1; round <= this.repairRounds && !verdict.passed; round += 1) {
         if (this.signal?.aborted) {
           break;

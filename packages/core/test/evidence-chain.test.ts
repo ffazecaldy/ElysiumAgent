@@ -91,7 +91,12 @@ describe("Orchestrator with evidence chain", () => {
     const chain = new EvidenceChain(RUN_ID);
     const events: HarnessEvent[] = [];
     const spawn: SpawnFn = (task: SubagentTask): Promise<SubagentResult> =>
-      Promise.resolve({ taskId: task.id, status: "pass", summary: `did ${task.id}`, artifacts: [] });
+      Promise.resolve({
+        taskId: task.id,
+        status: "pass",
+        summary: `did ${task.id}`,
+        artifacts: [],
+      });
     const orchestrator = new Orchestrator({
       spawn,
       critic: (task) => Promise.resolve({ passed: true, gaps: [] }),
@@ -106,11 +111,7 @@ describe("Orchestrator with evidence chain", () => {
     // Per task: exactly attempt + critic + task_ended, in that order.
     for (const taskId of ["t1", "t2"]) {
       const taskEntries = chain.byTask(taskId);
-      expect(taskEntries.map((entry) => entry.kind)).toEqual([
-        "attempt",
-        "critic",
-        "task_ended",
-      ]);
+      expect(taskEntries.map((entry) => entry.kind)).toEqual(["attempt", "critic", "task_ended"]);
       expect(taskEntries[0]?.summary).toContain("did");
       expect(taskEntries[1]?.summary).toContain("critic");
       expect(taskEntries[2]?.summary).toContain("task ended");
@@ -130,8 +131,7 @@ describe("Orchestrator with evidence chain", () => {
     // Every entry is mirrored as a `custom` event with evidence payload.
     const customEvidence = events.filter(
       (event) =>
-        event.type === "custom" &&
-        (event.data as { evidenceId?: string }).evidenceId !== undefined,
+        event.type === "custom" && (event.data as { evidenceId?: string }).evidenceId !== undefined,
     );
     expect(customEvidence).toHaveLength(6);
     for (const event of customEvidence) {
