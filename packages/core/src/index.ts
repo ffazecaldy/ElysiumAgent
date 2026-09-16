@@ -38,3 +38,7 @@ export * from "./session/session";
 export * from "./events/bus";
 // Quality gate
 export * from "./quality/gate";
+export {
+  riskScore,
+} from "./quality/risk-score";
+export type { RiskInput, RiskScore } from "./quality/risk-score";

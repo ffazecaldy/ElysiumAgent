@@ -15,6 +15,7 @@ import {
   StreamLineBatcher,
   type SwarmEvent,
 } from "../src/swarm-mode";
+import { riskScore } from "../../core/src/quality/risk-score";
 
 /** A planner answer with one valid subtask plus ignored noise around it. */
 const VALID_PLAN = `noise before
@@ -144,7 +145,7 @@ async function startScriptedServer(): Promise<ScriptedServer> {
       } else if (flattened.includes("Judge if the result")) {
         text = JSON.stringify({ passed: true, gaps: [] });
       } else {
-        text = "All done.";
+        text = "All done. file exists";
       }
       response.writeHead(200, { "Content-Type": "text/event-stream" });
       response.write(
@@ -195,6 +196,89 @@ describe("runSwarmGoal task_ended tokens", () => {
       expect(typeof data.tokens?.inputTokens).toBe("number");
       expect(data.tokens?.inputTokens).toBe(11);
       expect(data.tokens?.outputTokens).toBe(7);
+    } finally {
+      await server.close();
+    }
+  }, 15000);
+});
+
+// ── Adaptive verification: riskScore + risk-scaled gate threshold ────
+
+describe("riskScore", () => {
+  it("scores low at the 3/4 boundary", () => {
+    // 3 criteria, 0 files → 3 → low (inclusive upper bound).
+    expect(riskScore({ criteriaCount: 3, filesTouched: 0 })).toEqual({
+      score: 3,
+      level: "low",
+    });
+    // 4 criteria, 0 files → 4 → medium (just above the low bound).
+    expect(riskScore({ criteriaCount: 4, filesTouched: 0 })).toEqual({
+      score: 4,
+      level: "medium",
+    });
+  });
+
+  it("scores medium at the 6/7 boundary", () => {
+    // 0 criteria, 12 files → 6 → medium (inclusive upper bound).
+    expect(riskScore({ criteriaCount: 0, filesTouched: 12 })).toEqual({
+      score: 6,
+      level: "medium",
+    });
+    // 7 criteria, 0 files → 7 → high (just above the medium bound).
+    expect(riskScore({ criteriaCount: 7, filesTouched: 0 })).toEqual({
+      score: 7,
+      level: "high",
+    });
+  });
+
+  it("adds the critical-path bonus and can cross a level boundary", () => {
+    // 3 + 0 + 3 → 6 → medium.
+    expect(riskScore({ criteriaCount: 3, filesTouched: 0, hasCriticalPath: true })).toEqual({
+      score: 6,
+      level: "medium",
+    });
+    // Without the flag the same input stays low — bonus is not applied by default.
+    expect(riskScore({ criteriaCount: 3, filesTouched: 0 }).level).toBe("low");
+  });
+
+  it("clamps the score to 0-10 and is deterministic", () => {
+    expect(riskScore({ criteriaCount: 99, filesTouched: 99, hasCriticalPath: true })).toEqual({
+      score: 10,
+      level: "high",
+    });
+    expect(riskScore({ criteriaCount: 0, filesTouched: 0 })).toEqual({
+      score: 0,
+      level: "low",
+    });
+    const once = riskScore({ criteriaCount: 5, filesTouched: 4, hasCriticalPath: true });
+    const twice = riskScore({ criteriaCount: 5, filesTouched: 4, hasCriticalPath: true });
+    expect(once).toEqual(twice);
+  });
+});
+
+describe("swarm gate adaptive threshold", () => {
+  it("gate scoring stays deterministic with adaptive thresholds (coverage 10 passes at any level)", async () => {
+    const server = await startScriptedServer();
+    const events: SwarmEvent[] = [];
+    try {
+      await runSwarmGoal({
+        goal: "Write the file",
+        provider: { baseUrl: server.url, apiKey: "test-key", model: "mock" },
+        onEvent: (event) => {
+          events.push(event);
+        },
+      });
+      const done = events.find((event) => event.type === "done");
+      expect(done).toBeDefined();
+      const data = done?.data as {
+        scores: Array<{ taskId: string; weighted: number; passed: boolean }>;
+      };
+      expect(data.scores).toHaveLength(1);
+      const entry = data.scores[0];
+      expect(entry).toBeDefined();
+      // structuralJudge weights: coverage round(1*10)=10 → weighted 10.
+      expect(entry?.weighted).toBe(10);
+      expect(entry?.passed).toBe(true);
     } finally {
       await server.close();
     }

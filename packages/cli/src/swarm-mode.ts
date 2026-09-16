@@ -48,7 +48,9 @@ import {
   createBuiltinTools,
   createDefaultRubric,
   structuralJudge,
+  riskScore,
 } from "@elysium/core";
+("@elysium/core");
 
 // ── Public seam ───────────────────────────────────────────────────
 
@@ -784,7 +786,19 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
       content,
       ...(criteria !== undefined && criteria.length > 0 ? { criteria } : {}),
     };
-    const score = await gate.evaluate(artifact, rubric);
+    // Adaptive verification: scale the pass threshold (and skip extra
+    // strictness) by the deterministic risk of the subtask instead of a
+    // fixed one-size-fits-all bar. The default rubric is spread — its frozen
+    // shape in types/quality.ts stays untouched, only `threshold` is
+    // overridden per level.
+    const risk = riskScore({
+      criteriaCount: criteria?.length ?? 0,
+      filesTouched: subtask.result.artifacts.length,
+    });
+    const THRESHOLD_BY_LEVEL: Record<string, number> = { low: 6.5, medium: 8.0, high: 9.0 };
+    const levelThreshold = THRESHOLD_BY_LEVEL[risk.level] ?? 8.0;
+    const levelRubric: typeof rubric = { ...rubric, threshold: levelThreshold };
+    const score = await gate.evaluate(artifact, levelRubric);
     scores.push({ taskId: subtask.task.id, weighted: score.weighted, passed: score.passed });
   }
 

@@ -12,6 +12,7 @@
  * "aborted"; already-running attempts settle naturally.
  */
 import { randomBytes } from "node:crypto";
+import { type FailureCause, classifyFailure } from "../quality/failure-cause";
 import type { HarnessEvent } from "../types/events";
 import type {
   CriticVerdict,
@@ -207,12 +208,39 @@ export class Orchestrator {
     let result = await this.spawnSafely(runId, attemptTask);
     let attempts = 1;
     let verdict: CriticVerdict | undefined;
+    /** Classified critic-gap causes per round, for collapse detection. */
+    const priorCauses: FailureCause[][] = [];
     if (this.critic !== undefined) {
       verdict = await this.runCritic(this.critic, runId, attemptTask, result);
       for (let round = 1; round <= this.repairRounds && !verdict.passed; round += 1) {
         if (this.signal?.aborted) {
           break;
         }
+        // Causal collapse detection: when this round's critic gaps classify to
+        // causes that are all a subset of the previous round's causes (nothing
+        // new surfaced), repairing again cannot make progress — stop early.
+        // UNKNOWN causes are ignored when at least one known cause exists.
+        const allCauses = verdict.gaps.map((gap) => classifyFailure(gap).cause);
+        const knownCauses = allCauses.filter((cause) => cause !== "UNKNOWN");
+        const effectiveCauses = knownCauses.length > 0 ? knownCauses : allCauses;
+        const previous = priorCauses[priorCauses.length - 1];
+        if (
+          round >= 2 &&
+          previous !== undefined &&
+          effectiveCauses.length > 0 &&
+          effectiveCauses.every((cause) => previous.includes(cause))
+        ) {
+          const uniq = Array.from(new Set(effectiveCauses)).join(", ");
+          this.emit({
+            type: "error",
+            timestamp: nowIso(),
+            runId,
+            taskId: task.id,
+            data: { message: `repair loop collapse: repeated causes [${uniq}]`, scope: "task" },
+          });
+          break;
+        }
+        priorCauses.push(effectiveCauses);
         attemptTask = taskWithCriticGaps(attemptTask, verdict.gaps, round);
         result = await this.spawnSafely(runId, attemptTask);
         attempts += 1;
