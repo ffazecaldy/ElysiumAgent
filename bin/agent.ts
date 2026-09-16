@@ -329,17 +329,23 @@ function wireAgentFor(
             });
           },
         });
-        // Edit volume bookkeeping from write/edit tool results (diff-style
-        // content counts +/- lines; plain write counts its lines as added).
+        // Edit volume bookkeeping: for `write` re-read the produced file and
+        // count real lines (the tool result content is a summary message, not
+        // the file body). For `edit` count +/- lines in the diff-ish result.
         if (!result.isError && (call.name === "write" || call.name === "edit") && hooks?.stats) {
-          const content = result.content ?? "";
-          const adds = (content.match(/^\+/gm) ?? []).length;
-          const dels = (content.match(/^-/gm) ?? []).length;
-          if (adds + dels > 0) {
-            hooks.stats.added += adds;
-            hooks.stats.removed += dels;
-          } else if (call.name === "write") {
-            hooks.stats.added += content.split("\n").length;
+          const resultDetails = result.details as { path?: unknown } | undefined;
+          const writtenPath = typeof resultDetails?.path === "string" ? resultDetails.path : null;
+          if (call.name === "write" && writtenPath !== null && fs.existsSync(writtenPath)) {
+            const body = fs.readFileSync(writtenPath, "utf-8");
+            hooks.stats.added += body.split("\n").length;
+          } else {
+            const content = result.content ?? "";
+            const adds = (content.match(/^\+/gm) ?? []).length;
+            const dels = (content.match(/^-/gm) ?? []).length;
+            if (adds + dels > 0) {
+              hooks.stats.added += adds;
+              hooks.stats.removed += dels;
+            }
           }
         }
         return {
