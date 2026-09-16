@@ -89,6 +89,7 @@ import { CLI_VERSION } from "../packages/cli/src/index";
 import { runSwarmGoal, planGoal, type SwarmEvent } from "../packages/cli/src/swarm-mode";
 import { createSwarmView, type SwarmView } from "../packages/cli/src/swarm-view";
 import { collectSkills, skillRoots, skillsPromptBlock } from "../packages/cli/src/skills";
+import { createMdRenderer } from "../packages/cli/src/md";
 import {
   addMemoryEntry,
   clearMemory,
@@ -239,6 +240,46 @@ let liveStreamed = false;
 let inThink = false;
 let activeSpinner: ReturnType<typeof thinkingSpinner> | null = null;
 
+/**
+ * Markdown-aware streaming writer: buffers deltas until a newline arrives,
+ * then renders the complete line (headers, bullets, fences, bold, inline
+ * code). Created fresh per turn; flushed at turn end for the trailing
+ * partial line.
+ */
+const mdStream = (() => {
+  let renderer: ReturnType<typeof createMdRenderer> | null = null;
+  let buffer = "";
+  const write = (delta: string): void => {
+    if (renderer === null) renderer = createMdRenderer();
+    buffer += delta;
+    let nl = buffer.indexOf("\n");
+    while (nl >= 0) {
+      const line = buffer.slice(0, nl);
+      buffer = buffer.slice(nl + 1);
+      process.stdout.write(mdLine(renderer.feed(line)));
+      process.stdout.write("\n");
+      nl = buffer.indexOf("\n");
+    }
+  };
+  const flush = (): void => {
+    if (renderer === null) return;
+    if (buffer.length > 0) {
+      process.stdout.write(mdLine(renderer.flush(buffer)));
+      buffer = "";
+    }
+  };
+  const reset = (): void => {
+    renderer = null;
+    buffer = "";
+  };
+  return { write, flush, reset };
+})();
+
+/** Terminal-only answer styling: plain text outside a TTY. */
+function mdLine(s: string): string {
+  return process.stdout.isTTY === true ? s : s;
+}
+
 // ── Event bus (shared: meta-layer & CLI both consume) ─────────────
 
 const eventBus: EventBus = new RealEventBus({ bufferSize: 2000 });
@@ -378,7 +419,9 @@ function wireAgentFor(
             activeSpinner = null;
             liveStreamed = true;
           }
-          // Render with think-awareness (dim inside <think>, white outside).
+          // Render with think-awareness (dim inside <think>, white outside)
+          // and markdown-awareness outside <think>: complete lines go through
+          // the line renderer, trailing partial line waits for more deltas.
           let rest = d;
           while (rest.length > 0) {
             if (inThink) {
@@ -395,11 +438,11 @@ function wireAgentFor(
             } else {
               const start = rest.indexOf("<think>");
               if (start >= 0) {
-                process.stdout.write(white(rest.slice(0, start)));
+                mdStream.write(rest.slice(0, start));
                 inThink = true;
                 rest = rest.slice(start + 7);
               } else {
-                process.stdout.write(white(rest));
+                mdStream.write(rest);
                 rest = "";
               }
             }
@@ -1367,6 +1410,7 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
     sp.start("");
     liveStreamed = false;
     inThink = false;
+    mdStream.reset();
     let result;
     try {
       result = await agent.run(line, { history: xo.stats.history });
@@ -1381,7 +1425,9 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
     xo.stats.history = [...result.messages, ...xo.stats.history].slice(0, HISTORY_MAX_MESSAGES);
     const dt = Date.now() - t0;
     if (liveStreamed) {
-      // Deltas were already printed live; just close the block.
+      // Deltas were already printed live; flush the trailing partial line
+      // through the markdown renderer, then close the block.
+      mdStream.flush();
       process.stdout.write("\n");
     } else {
       // Nothing streamed (mock/quiet provider): replay the transcript.
