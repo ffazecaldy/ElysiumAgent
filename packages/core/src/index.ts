@@ -21,6 +21,7 @@ export * from "./types/errors";
 export * from "./agent/agent";
 // Orchestration variant (canonical executor currently under variant review)
 export * from "./orchestration/orchestrator";
+export * from "./orchestration/evidence";
 // Providers
 export * from "./providers/mock-provider";
 export * from "./providers/registry";

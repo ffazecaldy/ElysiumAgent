@@ -12,6 +12,7 @@
  * "aborted"; already-running attempts settle naturally.
  */
 import { randomBytes } from "node:crypto";
+import { type EvidenceChain, type EvidenceKind } from "./evidence";
 import { type FailureCause, classifyFailure } from "../quality/failure-cause";
 import type { HarnessEvent } from "../types/events";
 import type {
@@ -52,6 +53,12 @@ export interface OrchestratorOptions {
   spawnTimeoutMs?: number;
   /** Telemetry sink receiving typed harness events for this run. */
   onEvent?: (event: HarnessEvent) => void;
+  /**
+   * Optional evidence chain: attempt, critic and task_ended steps are recorded
+   * here and mirrored on the bus as `custom` events carrying
+   * `{ evidenceId, kind, summary }`.
+   */
+  evidence?: EvidenceChain;
 }
 
 /** Default per-spawn budget: 0 = timeout disabled. */
@@ -117,6 +124,7 @@ export class Orchestrator {
   private readonly signal?: AbortSignal;
   private readonly spawnTimeoutMs: number;
   private readonly onEvent?: (event: HarnessEvent) => void;
+  private readonly evidence?: EvidenceChain;
 
   constructor(options: OrchestratorOptions) {
     this.spawn = options.spawn;
@@ -126,6 +134,7 @@ export class Orchestrator {
     this.signal = options.signal;
     this.spawnTimeoutMs = Math.max(0, options.spawnTimeoutMs ?? DEFAULT_SPAWN_TIMEOUT_MS);
     this.onEvent = options.onEvent;
+    this.evidence = options.evidence;
   }
 
   /** Validates and executes the plan, returning a per-subtask report. */
@@ -188,13 +197,32 @@ export class Orchestrator {
    * Runs one subtask to completion: initial spawn, optional fresh-context critic,
    * and bounded repair rounds that re-spawn the same task with the critic gaps
    * appended to its context. Emits task_started, task_ended and task-scope
-   * latency events for this run.
+   * latency events for this run. When an evidence chain is configured, attempt,
+   * critic and task_ended steps are recorded and mirrored on the bus as
+   * `custom` events.
    */
   private async runSubtask(runId: string, task: SubagentTask): Promise<SubtaskReport> {
     if (this.signal?.aborted) {
       // Never started: reported as aborted, no lifecycle events are emitted.
       return { task, result: abortedResult(task.id) };
     }
+    /** Records an evidence entry and mirrors it as a `custom` bus event. */
+    const recordEvidence = (kind: EvidenceKind, summary: string, data?: {
+      [key: string]: unknown;
+    }): void => {
+      const entry = this.evidence?.add(kind, task.id, summary, data);
+      if (entry === undefined) {
+        return;
+      }
+      this.emit({
+        type: "custom",
+        timestamp: nowIso(),
+        runId,
+        taskId: task.id,
+        data: { evidenceId: entry.id, kind, summary },
+      });
+    };
+
     const startedAtMs = Date.now();
     this.emit({
       type: "task_started",
@@ -207,11 +235,20 @@ export class Orchestrator {
     let attemptTask: SubagentTask = task;
     let result = await this.spawnSafely(runId, attemptTask);
     let attempts = 1;
+    recordEvidence("attempt", `attempt 1: ${result.summary}`, {
+      status: result.status,
+      attempt: attempts,
+    });
     let verdict: CriticVerdict | undefined;
     /** Classified critic-gap causes per round, for collapse detection. */
     const priorCauses: FailureCause[][] = [];
     if (this.critic !== undefined) {
       verdict = await this.runCritic(this.critic, runId, attemptTask, result);
+      recordEvidence(
+        "critic",
+        `critic verdict round 1: ${verdict.passed ? "pass" : "fail"}`,
+        { passed: verdict.passed, gaps: verdict.gaps },
+      );
       for (let round = 1; round <= this.repairRounds && !verdict.passed; round += 1) {
         if (this.signal?.aborted) {
           break;
@@ -244,11 +281,26 @@ export class Orchestrator {
         attemptTask = taskWithCriticGaps(attemptTask, verdict.gaps, round);
         result = await this.spawnSafely(runId, attemptTask);
         attempts += 1;
+        recordEvidence("attempt", `attempt ${attempts}: ${result.summary}`, {
+          status: result.status,
+          attempt: attempts,
+          repairRound: round,
+        });
         verdict = await this.runCritic(this.critic, runId, attemptTask, result);
+        recordEvidence(
+          "critic",
+          `critic verdict round ${round + 1}: ${verdict.passed ? "pass" : "fail"}`,
+          { passed: verdict.passed, gaps: verdict.gaps },
+        );
       }
     }
 
     const durationMs = Date.now() - startedAtMs;
+    recordEvidence("task_ended", `task ended: ${result.status}`, {
+      status: result.status,
+      durationMs,
+      attempts,
+    });
     this.emit({
       type: "task_ended",
       timestamp: nowIso(),
