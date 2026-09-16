@@ -1179,6 +1179,7 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
             setWorking: (w) => {
               working = w;
             },
+            committed: () => state.committed,
           }),
         )
         .catch(() => undefined);
@@ -1198,6 +1199,7 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
           setWorking: (w) => {
             working = w;
           },
+          committed: () => state.committed,
         }),
       )
       .catch((err: unknown) => {
@@ -1303,6 +1305,8 @@ interface ReplContext {
   setAgent: (agent: Agent) => void;
   getAgent: () => Agent;
   setWorking: (working: boolean) => void;
+  /** Live provider config (read-only accessor for commands and the statusbar). */
+  committed: () => ProviderConfig;
 }
 
 async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
