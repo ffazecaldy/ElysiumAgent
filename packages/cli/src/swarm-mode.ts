@@ -47,10 +47,10 @@ import {
   type ToolResultMessage,
   createBuiltinTools,
   createDefaultRubric,
-  structuralJudge,
   riskScore,
+  structuralJudge,
 } from "@elysium/core";
-("@elysium/core");
+import { type TaskPathPolicy, checkPath } from "./task-ownership";
 
 // ── Public seam ───────────────────────────────────────────────────
 
@@ -102,6 +102,13 @@ export interface RunSwarmGoalOptions {
   /** Cooperative cancellation: when aborted, the run stops (planner, builder
    * tool calls and critic requests all observe the same signal). */
   signal?: AbortSignal;
+  /** Optional per-task path ownership: taskId → policy. When a policy exists
+   * for the task being spawned, its write/edit tool calls are checked in
+   * write mode (default-deny outside `allowed` globs) and read calls in read
+   * mode (blocked only by `forbidden`); denied calls get an isError result.
+   * Absent for a task → no enforcement (backward compatible). Note: bash is
+   * NOT intercepted — a documented gap. */
+  taskPolicies?: Map<string, TaskPathPolicy>;
 }
 
 /** Per-subtask quality-gate outcome attached to the orchestration report. */
@@ -552,10 +559,20 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
   };
 
   // Builtin tools scoped to the per-run workspace (same wiring as bin/agent.ts).
+  // Built fresh INSIDE each spawn when the task carries an ownership policy so
+  // executeTool closes over the right registry; the shared instance below is
+  // the fallback for tasks without one.
   const registry = new ToolRegistry();
   for (const tool of createBuiltinTools({ allowedRoots: [workspace] })) {
     registry.register(tool);
   }
+  const buildRegistry = (): ToolRegistry => {
+    const perTask = new ToolRegistry();
+    for (const tool of createBuiltinTools({ allowedRoots: [workspace] })) {
+      perTask.register(tool);
+    }
+    return perTask;
+  };
 
   // Artifact attribution: builders share the run workspace and run
   // concurrently, so a naive before/after diff per spawn double-counts files
@@ -581,6 +598,12 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
     const knownFiles = await listWorkspaceFiles(workspace);
     const taskArtifacts: string[] = [];
 
+    // Task ownership: a fresh per-task registry (allowedRoots=[workspace], as
+    // before) is built inside the spawn when the task has a policy, so the
+    // enforcement pre-check below closes over the right instance.
+    const policy = opts.taskPolicies?.get(task.id);
+    const taskRegistry = policy !== undefined ? buildRegistry() : registry;
+
     // Streamed builder text → line-batched "task_output" events for this task.
     const batcher = new StreamLineBatcher((text: string): void => {
       emitSwarm({ type: "task_output", data: { taskId: task.id, text } });
@@ -590,7 +613,49 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
       call: { id: string; name: string; arguments: Record<string, unknown> },
       ctx: { signal: AbortSignal },
     ): Promise<ToolResultMessage> => {
-      const tool = registry.get(call.name);
+      // Ownership pre-check: write/edit are writes, everything else a read.
+      // bash is deliberately not intercepted here (documented gap).
+      if (policy !== undefined && (call.name === "write" || call.name === "edit")) {
+        const target = call.arguments.path;
+        if (typeof target === "string") {
+          const verdict = checkPath(policy, target, "write");
+          if (!verdict.allowed) {
+            const content = `path denied by task ownership: ${target}`;
+            emitSwarm({
+              type: "task_tool",
+              data: { taskId: task.id, tool: call.name, isError: true },
+            });
+            return {
+              role: "tool_result",
+              toolCallId: call.id,
+              toolName: call.name,
+              content,
+              isError: true,
+            };
+          }
+        }
+      } else if (policy !== undefined && call.name === "read") {
+        const target = call.arguments.path;
+        if (typeof target === "string") {
+          const verdict = checkPath(policy, target, "read");
+          if (!verdict.allowed) {
+            const content = `path denied by task ownership: ${target}`;
+            emitSwarm({
+              type: "task_tool",
+              data: { taskId: task.id, tool: call.name, isError: true },
+            });
+            return {
+              role: "tool_result",
+              toolCallId: call.id,
+              toolName: call.name,
+              content,
+              isError: true,
+            };
+          }
+        }
+      }
+
+      const tool = taskRegistry.get(call.name);
       if (!tool) {
         emitSwarm({ type: "task_tool", data: { taskId: task.id, tool: call.name, isError: true } });
         return {
@@ -644,7 +709,7 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
     const agent = new Agent({
       systemPrompt: BUILDER_SYSTEM_PROMPT,
       provider,
-      tools: registry.list(),
+      tools: taskRegistry.list(),
       maxTurns: BUILDER_MAX_TURNS,
       executeTool,
       onEvent: (agentEvent: AgentEvent): void => {

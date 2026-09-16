@@ -23,7 +23,10 @@ function isHypothesis(value: unknown): value is Hypothesis {
     h.change !== null &&
     isValidChange(h.change as Hypothesis["change"]) &&
     typeof h.expectedEffect === "string" &&
-    (h.status === "proposed" || h.status === "applied" || h.status === "promoted" || h.status === "rejected") &&
+    (h.status === "proposed" ||
+      h.status === "applied" ||
+      h.status === "promoted" ||
+      h.status === "rejected") &&
     (h.delta === null || typeof h.delta === "number")
   );
 }
@@ -79,9 +82,7 @@ export class HypothesisStore {
       process.stderr.write(`[hypothesis-store] update ignored, unknown id: ${hypothesis.id}\n`);
       return;
     }
-    this.hypotheses = this.hypotheses.map((h) =>
-      h.id === hypothesis.id ? { ...hypothesis } : h,
-    );
+    this.hypotheses = this.hypotheses.map((h) => (h.id === hypothesis.id ? { ...hypothesis } : h));
     this.persist(hypothesis);
   }
 

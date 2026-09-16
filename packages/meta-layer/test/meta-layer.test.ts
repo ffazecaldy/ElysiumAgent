@@ -124,7 +124,9 @@ describe("HypothesisEngine", () => {
       events.push(taskEnded("pass", `t${i}`));
       events.push(latency(5000, `t${i}`));
     }
-    expect(engine.observe(events).filter((h) => h.change.kind === "max_concurrency")).toHaveLength(1);
+    expect(engine.observe(events).filter((h) => h.change.kind === "max_concurrency")).toHaveLength(
+      1,
+    );
     const secondWindow = events.map((e) => ({ ...e, taskId: `${e.taskId}-b` }));
     expect(
       engine.observe(secondWindow).filter((h) => h.change.kind === "max_concurrency"),
@@ -137,12 +139,16 @@ describe("HypothesisStore", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ml-"));
     const file = path.join(dir, "h.jsonl");
     const engine = new HypothesisEngine({ minWindow: 3 });
-    const h = engine.observe([taskEnded("fail", "a"), taskEnded("fail", "b"), taskEnded("fail", "c")]);
+    const h = engine.observe([
+      taskEnded("fail", "a"),
+      taskEnded("fail", "b"),
+      taskEnded("fail", "c"),
+    ]);
     expect(h).toHaveLength(1);
     const s1 = new HypothesisStore({ filePath: file });
-    s1.append(h[0] as NonNullable<typeof h[0]>);
+    s1.append(h[0] as NonNullable<(typeof h)[0]>);
     engine.markPromoted(h[0]?.id ?? "", 0.3);
-    s1.update({ ...(h[0] as NonNullable<typeof h[0]>), status: "promoted", delta: 0.3 });
+    s1.update({ ...(h[0] as NonNullable<(typeof h)[0]>), status: "promoted", delta: 0.3 });
 
     // Restore on a "restart": a fresh engine gets hydrated from the store.
     const s2 = new HypothesisStore({ filePath: file });
@@ -154,7 +160,11 @@ describe("HypothesisStore", () => {
     expect(engine2.get(h[0]?.id ?? "")?.status).toBe("promoted");
 
     // Restored state still drives dedup: no duplicate proposal.
-    const again = engine2.observe([taskEnded("fail", "z1"), taskEnded("fail", "z2"), taskEnded("fail", "z3")]);
+    const again = engine2.observe([
+      taskEnded("fail", "z1"),
+      taskEnded("fail", "z2"),
+      taskEnded("fail", "z3"),
+    ]);
     expect(again).toHaveLength(0);
   });
 

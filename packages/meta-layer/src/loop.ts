@@ -43,7 +43,13 @@ export class MetaLayer {
   private readonly measure: (metric: string) => Promise<number>;
   private readonly evaluationInterval: number;
   private readonly pending: HarnessEvent[] = [];
-  private stats: MetaLayerStats = { persisted: 0, hypothesesProposed: 0, promoted: 0, rejected: 0, errors: 0 };
+  private stats: MetaLayerStats = {
+    persisted: 0,
+    hypothesesProposed: 0,
+    promoted: 0,
+    rejected: 0,
+    errors: 0,
+  };
   private unsubscribe: Unsubscribe | null = null;
   private bus: EventBus | null = null;
   private chain: Promise<void> = Promise.resolve();
