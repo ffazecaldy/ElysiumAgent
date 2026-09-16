@@ -109,7 +109,7 @@ export function saveEnvValue(projectRoot: string, key: string, value: string): v
   // Quote values that contain whitespace or special chars; the paired double
   // quotes are stripped again by the loadEnvFile parser (stripQuotes).
   const stored = /[\s#"']/.test(value) ? JSON.stringify(value) : value;
-  const idx = lines.findIndex((l) => l.trim().startsWith(key + "="));
+  const idx = lines.findIndex((l) => l.trim().startsWith(`${key}=`));
   if (idx >= 0) {
     lines[idx] = `${key}=${stored}`;
   } else {
@@ -123,7 +123,7 @@ export function saveEnvValue(projectRoot: string, key: string, value: string): v
  * Shorter secrets render as "***" (nothing worth revealing).
  */
 export function maskSecret(key: string): string {
-  return key.length >= 16 ? key.slice(0, 3) + "…" + key.slice(-3) : "***";
+  return key.length >= 16 ? `${key.slice(0, 3)}…${key.slice(-3)}` : "***";
 }
 
 /** Return a human-readable description of the current config. */

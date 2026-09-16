@@ -190,6 +190,16 @@ export function createBashTool(policy: PathPolicy): Tool {
             timestamp: new Date().toISOString(),
             data: { warn: true, tool: "bash", command: redactSecrets(command) },
           });
+          if (ctx.confirm !== undefined) {
+            // Operator approval gate: a flagged command runs only when the
+            // caller's confirm callback approves it. A decline must leave no
+            // side effects — the command is never spawned.
+            const confirmed = await ctx.confirm(command);
+            if (!confirmed) {
+              telemetry(ctx.emit, "bash", Date.now() - t0, true);
+              return err(`command cancelled by operator: ${redactSecrets(command)}`);
+            }
+          }
         }
         const { stdout, stderr, code, killed, spawnError } = await runCommand(
           command,

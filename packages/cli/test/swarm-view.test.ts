@@ -128,3 +128,29 @@ describe("snapshot", () => {
     expect(JSON.stringify(snap)).not.toContain("\\u001b");
   });
 });
+
+describe("taskEnded tokens", () => {
+  it("stores tokensIn/tokensOut in the snapshot when the event carries them", () => {
+    const view = createSwarmView();
+    view.plan("obiettivo token", [{ id: "task-t", goal: "conta i token" }], "/tmp/ws");
+    view.taskStarted("task-t");
+    view.taskEnded("task-t", "pass", 900, 1, { inputTokens: 800, outputTokens: 400 });
+
+    const snap: SwarmSnapshot = view.snapshot();
+    const t = snap.tasks.find((x) => x.id === "task-t");
+    expect(t?.status).toBe("pass");
+    expect(t?.tokensIn).toBe(800);
+    expect(t?.tokensOut).toBe(400);
+    expect((t?.tokensIn ?? 0) + (t?.tokensOut ?? 0)).toBe(1200);
+  });
+
+  it("defaults tokens to 0 when taskEnded is called without them", () => {
+    const view = createSwarmView();
+    view.plan("obiettivo token", [{ id: "task-u", goal: "senza token" }], "/tmp/ws");
+    view.taskStarted("task-u");
+    view.taskEnded("task-u", "pass", 500, 1);
+    const t = view.snapshot().tasks.find((x) => x.id === "task-u");
+    expect(t?.tokensIn).toBe(0);
+    expect(t?.tokensOut).toBe(0);
+  });
+});

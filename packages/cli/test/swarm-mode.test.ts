@@ -3,9 +3,18 @@
  * - parsePlannerOutput: garbage → deterministic fallback, cap, unique ids,
  * - parseCriticVerdict: garbage → passed with default gap, valid JSON parsed,
  * - StreamLineBatcher: line emission, flush, and timer fallback (fake timers).
+ * - runSwarmGoal: task_ended events carry builder token usage (local SSE server).
  */
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { parseCriticVerdict, parsePlannerOutput, StreamLineBatcher } from "../src/swarm-mode";
+import {
+  parseCriticVerdict,
+  parsePlannerOutput,
+  runSwarmGoal,
+  StreamLineBatcher,
+  type SwarmEvent,
+} from "../src/swarm-mode";
 
 /** A planner answer with one valid subtask plus ignored noise around it. */
 const VALID_PLAN = `noise before
@@ -103,4 +112,91 @@ describe("StreamLineBatcher", () => {
     vi.advanceTimersByTime(1);
     expect(lines).toEqual(["dangling partial"]);
   });
+});
+
+// ── runSwarmGoal: task_ended token surfacing ──────────────────────
+
+interface ScriptedServer {
+  url: string;
+  close: () => Promise<void>;
+}
+
+/**
+ * Minimal OpenAI-compatible SSE server: routes on the prompt content
+ * (planner / critic / builder) and answers every turn with fixed usage
+ * {prompt_tokens: 11, completion_tokens: 7} so the builder's cumulative
+ * usage is deterministic.
+ */
+async function startScriptedServer(): Promise<ScriptedServer> {
+  const server = http.createServer((request, response) => {
+    let body = "";
+    request.on("data", (chunk: Buffer) => {
+      body += chunk.toString();
+    });
+    request.on("end", () => {
+      const parsed = JSON.parse(body) as { messages: Array<{ content: string }> };
+      const flattened = parsed.messages.map((m) => String(m.content)).join(" ");
+      let text: string;
+      if (flattened.includes("Decompose the goal")) {
+        text = JSON.stringify({
+          subtasks: [{ id: "a", goal: "Write the file", acceptanceCriteria: ["file exists"] }],
+        });
+      } else if (flattened.includes("Judge if the result")) {
+        text = JSON.stringify({ passed: true, gaps: [] });
+      } else {
+        text = "All done.";
+      }
+      response.writeHead(200, { "Content-Type": "text/event-stream" });
+      response.write(
+        `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: text } }] })}\n\n`,
+      );
+      response.write(
+        `data: ${JSON.stringify({
+          choices: [{ index: 0, delta: {} }],
+          usage: { prompt_tokens: 11, completion_tokens: 7 },
+        })}\n\n`,
+      );
+      response.write("data: [DONE]\n\n");
+      response.end();
+    });
+  });
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+  const address = server.address() as AddressInfo;
+  return {
+    url: `http://127.0.0.1:${address.port}/v1`,
+    close: () =>
+      new Promise<void>((resolve) => {
+        (server as unknown as { closeAllConnections?: () => void }).closeAllConnections?.();
+        server.close(() => resolve());
+      }),
+  };
+}
+
+describe("runSwarmGoal task_ended tokens", () => {
+  it("surfaces builder token usage on task_ended events", async () => {
+    const server = await startScriptedServer();
+    try {
+      const events: SwarmEvent[] = [];
+      await runSwarmGoal({
+        goal: "Write the file",
+        provider: { baseUrl: server.url, apiKey: "test-key", model: "mock" },
+        onEvent: (event) => {
+          events.push(event);
+        },
+      });
+      const ended = events.filter((event) => event.type === "task_ended");
+      expect(ended).toHaveLength(1);
+      const data = ended[0]?.data as {
+        tokens?: { inputTokens?: unknown; outputTokens?: unknown };
+      };
+      expect(data.tokens).toBeDefined();
+      expect(typeof data.tokens?.inputTokens).toBe("number");
+      expect(data.tokens?.inputTokens).toBe(11);
+      expect(data.tokens?.outputTokens).toBe(7);
+    } finally {
+      await server.close();
+    }
+  }, 15000);
 });

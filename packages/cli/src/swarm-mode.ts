@@ -42,6 +42,7 @@ import {
   type SpawnFn,
   type SubagentResult,
   type SubagentTask,
+  type TokenUsage,
   ToolRegistry,
   type ToolResultMessage,
   createBuiltinTools,
@@ -56,7 +57,7 @@ import {
  * Per-kind `data` payloads:
  * - `plan`         → `{ goal, source, subtasks: [{id, goal, acceptanceCriteria}], workspacePath }`
  * - `task_started` → `{ taskId, goal, ...orchestrator data }`
- * - `task_ended`   → `{ taskId, status, durationMs, attempts }`
+ * - `task_ended`   → `{ taskId, status, durationMs, attempts, tokens? }` — tokens present when the builder reported usage
  * - `task_output`  → `{ taskId, text }` — line-batched builder streamed text
  * - `task_tool`    → `{ taskId, tool, isError }` — after each builder tool execution
  * - `critic`       → `{ taskId, phase, passed?, gaps? }`
@@ -561,6 +562,9 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
   // observer wins — in practice the creating task's own tool continuation).
   const claimedArtifacts = new Map<string, string>();
 
+  /** Latest cumulative builder usage per task id (zeroed when a builder run throws). */
+  const taskUsageById = new Map<string, TokenUsage>();
+
   const spawn: SpawnFn = async (task: SubagentTask): Promise<SubagentResult> => {
     // Repair detection: the Orchestrator re-spawns with critic gaps appended
     // to the task context — surface that as a repair event as it happens.
@@ -657,6 +661,7 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
     try {
       const run = await agent.run(buildBuilderPrompt(task, workspace));
       batcher.flush();
+      taskUsageById.set(task.id, run.usage);
       const summary = finalAssistantText(run.messages);
       const completed = run.stopReason === "end_turn" && summary !== null;
       return {
@@ -667,6 +672,7 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
       };
     } catch (error: unknown) {
       batcher.flush();
+      taskUsageById.set(task.id, { inputTokens: 0, outputTokens: 0 });
       return {
         taskId: task.id,
         status: "fail",
@@ -736,7 +742,22 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
           },
         });
       } else if (event.type === "task_ended") {
-        emitSwarm({ type: "task_ended", data: { taskId: event.taskId, ...event.data } });
+        const usage = taskUsageById.get(event.taskId ?? "");
+        emitSwarm({
+          type: "task_ended",
+          data: {
+            taskId: event.taskId,
+            ...event.data,
+            ...(usage !== undefined
+              ? {
+                  tokens: {
+                    inputTokens: usage.inputTokens,
+                    outputTokens: usage.outputTokens,
+                  },
+                }
+              : {}),
+          },
+        });
       } else if (event.type === "error") {
         emitSwarm({ type: "error", data: { taskId: event.taskId, ...event.data } });
       }

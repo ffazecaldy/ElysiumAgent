@@ -57,6 +57,12 @@ export function truncate(s: string, w: number): string {
   return `${t.slice(0, Math.max(1, w - 1)).trimEnd()}…`;
 }
 
+/** Compact token count for the pane meta row: `1200 → 1.2k` (1 decimal). */
+export function formatTok(n: number): string {
+  if (n < 1000) return `${n}`;
+  return `${(n / 1000).toFixed(1)}k`;
+}
+
 /**
  * Pane assignment: running tasks first, then QUEUED (so upcoming work is
  * already visible), then the freshest finished ones fill the remaining
@@ -82,6 +88,9 @@ interface TaskPane {
   startedAt: number | null;
   endedAt: number | null;
   attempts: number;
+  /** Tokens billed to this task; 0 until a `tokens` event arrives. */
+  tokensIn: number;
+  tokensOut: number;
 }
 
 const OUT_ROWS = 2;
@@ -92,7 +101,13 @@ export interface SwarmView {
   taskStarted(id: string): void;
   taskOutput(id: string, text: string): void;
   taskTool(id: string, tool: string, isError: boolean): void;
-  taskEnded(id: string, status: string, durationMs: number, attempts: number): void;
+  taskEnded(
+    id: string,
+    status: string,
+    durationMs: number,
+    attempts: number,
+    tokens?: { inputTokens: number; outputTokens: number },
+  ): void;
   critic(id: string, passed: boolean): void;
   repair(id: string, round: number): void;
   error(message: string): void;
@@ -111,6 +126,9 @@ export interface SwarmSnapshotTask {
   /** Seconds since start; 0 if not started; frozen at end once ended. */
   elapsedSec: number;
   lastTool: string;
+  /** Billed tokens (input/output); 0 when the event carried none. */
+  tokensIn: number;
+  tokensOut: number;
 }
 
 /** Plain-data view of the swarm state, safe for programmatic consumption. */
@@ -199,7 +217,8 @@ export function createSwarmView(): SwarmView {
         const line = raw.length > 0 ? dim(truncate(raw, inner - 3)) : dim("…");
         rows.push(clip(`│ ${line}`, inner));
       }
-      const meta = `╰─ tools ${t.tools}${t.lastTool.length > 0 ? ` · ${t.lastTool}` : ""}${t.attempts > 1 ? ` · attempts ${t.attempts}` : ""}`;
+      const tokTotal = t.tokensIn + t.tokensOut;
+      const meta = `╰─ tools ${t.tools}${t.lastTool.length > 0 ? ` · ${t.lastTool}` : ""}${tokTotal > 0 ? ` · ${formatTok(tokTotal)} tok` : ""}${t.attempts > 1 ? ` · attempts ${t.attempts}` : ""}`;
       rows.push(clip(meta, inner));
     }
 
@@ -257,6 +276,8 @@ export function createSwarmView(): SwarmView {
           startedAt: null,
           endedAt: null,
           attempts: 1,
+          tokensIn: 0,
+          tokensOut: 0,
         });
         order.push(t.id);
         console.log(`    ${dim(t.id)}  ${t.goal}`);
@@ -295,7 +316,7 @@ export function createSwarmView(): SwarmView {
       }
       if (!animated) linear(`  ${dim(`tool ${id} ${tool}${isError ? " [!!]" : ""}`)}`);
     },
-    taskEnded(id, status, durationMs, attempts): void {
+    taskEnded(id, status, durationMs, attempts, tokens): void {
       const t = tasks.get(id);
       const s: TaskStatus =
         status === "pass"
@@ -310,6 +331,10 @@ export function createSwarmView(): SwarmView {
         t.endedAt = Date.now();
         t.attempts = attempts;
         if (t.startedAt !== null) t.startedAt = t.endedAt - durationMs;
+        if (tokens) {
+          t.tokensIn = tokens.inputTokens;
+          t.tokensOut = tokens.outputTokens;
+        }
       }
       pushTrail(
         `${id} ${status} (${(durationMs / 1000).toFixed(1)}s, ${attempts} attempt${attempts > 1 ? "s" : ""})`,
@@ -345,7 +370,16 @@ export function createSwarmView(): SwarmView {
       const rows: SwarmSnapshotTask[] = order.map((id) => {
         const t = tasks.get(id);
         if (t === undefined) {
-          return { id, status: "queued", tools: 0, attempts: 1, elapsedSec: 0, lastTool: "" };
+          return {
+            id,
+            status: "queued",
+            tools: 0,
+            attempts: 1,
+            elapsedSec: 0,
+            lastTool: "",
+            tokensIn: 0,
+            tokensOut: 0,
+          };
         }
         const elapsed =
           t.startedAt === null ? 0 : Math.floor(((t.endedAt ?? Date.now()) - t.startedAt) / 1000);
@@ -356,6 +390,8 @@ export function createSwarmView(): SwarmView {
           attempts: t.attempts,
           elapsedSec: Math.max(0, elapsed),
           lastTool: t.lastTool,
+          tokensIn: t.tokensIn,
+          tokensOut: t.tokensOut,
         };
       });
       return {

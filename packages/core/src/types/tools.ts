@@ -11,6 +11,13 @@ export interface ToolContext {
   signal: AbortSignal;
   /** Tools may emit progress/telemetry events. */
   emit(event: HarnessEvent): void;
+  /**
+   * Optional operator approval gate. When defined, tools whose policy
+   * evaluation flags the operation (e.g. bash warnCommands) must await this
+   * callback before executing; a `false` result cancels the operation and
+   * yields an isError tool result. Absent means no approval is required.
+   */
+  confirm?: (command: string) => Promise<boolean>;
 }
 
 export interface ToolResult {

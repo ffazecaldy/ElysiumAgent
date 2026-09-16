@@ -208,6 +208,9 @@ interface SessionStats {
   transcript: Array<{ role: string; text: string }>;
   /** Rolling conversation history carried across prompts (bounded). */
   history: AgentMessage[];
+  /** Edit volume: lines added/removed this session (write/edit tools). */
+  added: number;
+  removed: number;
 }
 
 /** History cap: messages kept across prompts (bounded context growth). */
@@ -222,6 +225,8 @@ function newSessionStats(): SessionStats {
     turns: 0,
     transcript: [],
     history: [],
+    added: 0,
+    removed: 0,
   };
 }
 
@@ -308,7 +313,35 @@ function wireAgentFor(
           cwd: process.cwd(),
           signal: ctx.signal,
           emit: (e) => eventBus.emit(e),
+          // Approval gate: warn-flagged bash commands ask the operator first
+          // (declined → the command never runs). The answer is typed into the
+          // normal prompt: the readline handler sees pendingConfirm first.
+          confirm: (command: string): Promise<boolean> => {
+            process.stdout.write(
+              `\n  ${yellow(marks.warn)} Comando flaggato dalla policy: ${white(command)}\n  ${yellow("Consenti? [y/N] ")}`,
+            );
+            return new Promise<boolean>((resolve) => {
+              pendingConfirm = (answer) => {
+                const allowed = answer === "y" || answer === "yes";
+                if (!allowed) console.log(`  ${red(marks.err)} Annullato dall'operatore.`);
+                resolve(allowed);
+              };
+            });
+          },
         });
+        // Edit volume bookkeeping from write/edit tool results (diff-style
+        // content counts +/- lines; plain write counts its lines as added).
+        if (!result.isError && (call.name === "write" || call.name === "edit") && hooks?.stats) {
+          const content = result.content ?? "";
+          const adds = (content.match(/^\+/gm) ?? []).length;
+          const dels = (content.match(/^-/gm) ?? []).length;
+          if (adds + dels > 0) {
+            hooks.stats.added += adds;
+            hooks.stats.removed += dels;
+          } else if (call.name === "write") {
+            hooks.stats.added += content.split("\n").length;
+          }
+        }
         return {
           role: "tool_result",
           toolCallId: call.id,
@@ -444,6 +477,10 @@ function validateApiKey(key: string): string | null {
 function maskKey(key: string): string {
   return maskSecret(key);
 }
+
+// ── Approval gate (warn-flagged commands) ─────────────────────────
+/** Pending y/N answer the readline handler must deliver (null when none). */
+let pendingConfirm: ((answer: string) => void) | null = null;
 
 // ── Command dispatcher (transactional provider switching) ────────
 
@@ -983,8 +1020,15 @@ async function dispatchCommand(
               status?: string;
               durationMs?: number;
               attempts?: number;
+              tokens?: { inputTokens: number; outputTokens: number };
             };
-            view?.taskEnded(d.taskId ?? "", d.status ?? "fail", d.durationMs ?? 0, d.attempts ?? 1);
+            view?.taskEnded(
+              d.taskId ?? "",
+              d.status ?? "fail",
+              d.durationMs ?? 0,
+              d.attempts ?? 1,
+              d.tokens,
+            );
           } else if (e.type === "critic") {
             const d = e.data as { taskId?: string; passed?: boolean; phase?: string };
             if (d.phase !== "start") view?.critic(d.taskId ?? "", d.passed === true);
@@ -1060,7 +1104,9 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
       skills: SKILLS.map((s) => s.name),
     }),
   );
-  console.log(`  ${dim(`${process.cwd()} · artifacts ${WORKSPACE}`)}`);
+  console.log(
+    `  ${dim(`mode ${MODES[currentMode].label} · workspace ${WORKSPACE} · cwd ${process.cwd()}`)}`,
+  );
   console.log(`  ${dim("Type /help for commands. Ctrl+C aborts a run; twice to quit.\n")}`);
 
   const rl = readline.createInterface({
@@ -1085,15 +1131,34 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   let working = false; // a run is in flight
   let warnedThisRun = false;
   rl.on("line", (raw: string) => {
+    // Approval gate answer has priority: it is delivered to the pending
+    // confirm resolver instead of being queued as a prompt.
+    if (pendingConfirm !== null) {
+      const resolve = pendingConfirm;
+      pendingConfirm = null;
+      resolve(raw.trim());
+      return;
+    }
     if (working) {
-      // The agent is generating. Queue typed-ahead lines (so /quit is never
-      // lost) but warn once per run that a new task cannot start mid-run.
+      // The agent is generating. Non-command input STEERS the in-flight run
+      // (the core Agent injects it between turns — the human redirect loop
+      // from "Terminal Is All You Need"); slash commands still queue so
+      // /quit is never lost. Esc cancels the run entirely.
       const t = raw.trim();
-      if (t.length > 0 && !warnedThisRun) {
-        warnedThisRun = true;
-        console.log(
-          `\n  ${yellow(marks.warn)} Elysium is working — "${t === "/quit" ? "/quit" : "input"}" queued; Esc cancels the run.\n`,
-        );
+      if (t === "/quit") {
+        console.log(`\n  ${dim("/quit queued — will run after the current turn.")}\n`);
+      } else if (t.startsWith("/") && t.length > 1) {
+        if (!warnedThisRun) {
+          warnedThisRun = true;
+          console.log(
+            `\n  ${yellow(marks.warn)} Command queued — it runs after the current turn.\n`,
+          );
+        }
+      } else if (t.length > 0) {
+        inFlight?.steer(t);
+        console.log(`  ${cyan("↳")} ${dim("steer inviato all'agente in esecuzione")}`);
+        rl.prompt();
+        return;
       }
       lineQueue = lineQueue
         .then(() =>
@@ -1350,6 +1415,10 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
       mode: currentMode,
       tokens: xo.stats.tokensIn + xo.stats.tokensOut,
       turns: xo.stats.turns,
+      historyMsgs: xo.stats.history.length,
+      historyCap: HISTORY_MAX_MESSAGES,
+      added: xo.stats.added,
+      removed: xo.stats.removed,
     });
     if (strip.length > 0) {
       console.log(strip);

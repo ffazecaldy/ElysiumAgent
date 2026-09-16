@@ -315,8 +315,21 @@ export function welcomeScreen(info: WelcomeInfo): string {
   ].join("\n");
 }
 
+/** 8-slot context-window bar: ▮ used / ▯ free, color-coded by pressure. */
+function contextBar(msgs?: number, cap?: number): string {
+  if (msgs === undefined || cap === undefined || cap <= 0) return "";
+  const pct = Math.min(1, Math.max(0, msgs / cap));
+  const filled = Math.min(8, Math.max(0, Math.round(pct * 8)));
+  const blocks = "▮".repeat(filled) + "▯".repeat(8 - filled);
+  const tint = pct >= 0.9 ? red : pct >= 0.7 ? yellow : green;
+  return tint(`[${blocks}]`);
+}
+
 /**
- * One-line inverted status strip (dark-green bg, neon fg). Non-TTY: empty.
+ * Inverted status strip (dark-green bg, neon fg), width-aware: on wide
+ * terminals (>=100 col) one line — `◆ model · mode · [context] · tok ·
+ * turns · +A/−R · /help`; below that it packs on two lines (identity row,
+ * counters row). Non-TTY: plain unpadded text, deterministic and greppable.
  * Call again (e.g. after /status or a turn) to print a refreshed one.
  */
 export function statusBar(info: {
@@ -324,13 +337,31 @@ export function statusBar(info: {
   mode: string;
   tokens: number;
   turns: number;
+  /** Conversation messages vs context cap → drives the 8-slot ▮/▯ bar. */
+  historyMsgs?: number;
+  historyCap?: number;
+  /** Diff counters; rendered as `+added/−removed` only when present. */
+  added?: number;
+  removed?: number;
 }): string {
-  if (!COLORS_ENABLED) return "";
+  const bar = contextBar(info.historyMsgs, info.historyCap);
+  const diff =
+    info.added === undefined && info.removed === undefined
+      ? ""
+      : `+${info.added ?? 0}/−${info.removed ?? 0}`;
+  const head = [`◆ ${info.model}`, info.mode, bar].filter((s) => s.length > 0);
+  const tail = [`${info.tokens} tok`, `${info.turns} turns`, diff, "/help"].filter(
+    (s) => s.length > 0,
+  );
   const termW = Math.max(60, process.stdout.columns ?? 100);
-  const text = `  ◆ ${info.model} · ${info.mode} · ${info.tokens} tok · ${info.turns} turns · /help `;
-  const visible = stripAnsi(text).length;
-  const pad = " ".repeat(Math.max(0, termW - visible));
-  return `\u001B[48;5;22m\u001B[38;5;46m${text}${pad}\u001B[0m`;
+  const join = (segs: string[]): string => `  ${segs.join(" · ")} `;
+  const paint = (text: string): string => {
+    if (!COLORS_ENABLED) return text.trimEnd();
+    const pad = " ".repeat(Math.max(0, termW - stripAnsi(text).length));
+    return `\u001B[48;5;22m\u001B[38;5;46m${text}${pad}\u001B[0m`;
+  };
+  if (termW >= 100) return paint(join([...head, ...tail]));
+  return [paint(join(head)), paint(join(tail))].join("\n");
 }
 
 function truncatePlain(s: string, w: number): string {

@@ -20,14 +20,12 @@ function jsonLine(entry: {
   timestamp?: string;
   label: string;
 }): string {
-  return (
-    JSON.stringify({
-      id: entry.id,
-      parentId: entry.parentId,
-      timestamp: entry.timestamp ?? new Date().toISOString(),
-      data: { kind: "meta", label: entry.label },
-    }) + "\n"
-  );
+  return `${JSON.stringify({
+    id: entry.id,
+    parentId: entry.parentId,
+    timestamp: entry.timestamp ?? new Date().toISOString(),
+    data: { kind: "meta", label: entry.label },
+  })}\n`;
 }
 
 describe("Session restore semantics", () => {
