@@ -1106,6 +1106,7 @@ async function dispatchCommand(
         maxSubtasks: MODES[currentMode].maxSubtasks,
         signal: controller.signal,
         runsRoot: process.cwd(),
+        gitCheckpoints: true,
         onEvent: (e: SwarmEvent) => {
           if (e.type === "plan") {
             sp.stop("plan ready");

@@ -161,9 +161,16 @@ describe("builtin tools", () => {
     const registry = new ToolRegistry();
     for (const t of createBuiltinTools(policyFor(root))) registry.register(t);
     expect(() => registry.register(createReadTool(policy()))).toThrow(/already registered/);
-    expect(registry.list()).toHaveLength(4);
+    expect(registry.list()).toHaveLength(6);
     const defs = registry.toDefinitions();
-    expect(defs.map((d) => d.name).sort()).toEqual(["bash", "edit", "read", "write"]);
+    expect(defs.map((d) => d.name).sort()).toEqual([
+      "bash",
+      "edit",
+      "read",
+      "web_fetch",
+      "web_search",
+      "write",
+    ]);
     expect(defs.every((d) => typeof d.parameters === "object")).toBe(true);
   });
 });

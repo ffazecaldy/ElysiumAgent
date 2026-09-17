@@ -56,6 +56,7 @@ import type { BashCommandPolicy } from "./policy/bash-policy";
 import { type TaskPathPolicy, checkPath } from "./task-ownership";
 import { finishRun, recordRunPhase as markRunPhase, startRunRecord } from "./swarm-run-store";
 import { markInterrupted } from "./run-state";
+import { createSwarmGit } from "./swarm-git";
 
 // ── Public seam ───────────────────────────────────────────────────
 
@@ -127,6 +128,12 @@ export interface RunSwarmGoalOptions {
    * `resume` support). Absent → no persistence (backward compatible, keeps
    * tests hermetic). */
   runsRoot?: string;
+  /** Per-run git checkpoints (E6): the run workspace becomes a real git repo
+   * with a tag after planning (`elysium/plan`) and after each builder task
+   * (`elysium/task-<id>`); repair re-spawns roll artifact files back to the
+   * task's checkpoint first. Default FALSE (no repo created — back-compat
+   * and hermetic tests); the interactive REPL enables it. */
+  gitCheckpoints?: boolean;
 }
 
 /** Per-subtask quality-gate outcome attached to the orchestration report. */
@@ -529,6 +536,9 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
 
   // Fresh scratch workspace per RUN (all subtasks share it; left in place).
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "elysium-swarm-"));
+  // E6: per-run git checkpoints (opt-in). All functions no-op when disabled
+  // or when git is unavailable — never blocks the run.
+  const swarmGit = createSwarmGit(workspace, { enabled: opts.gitCheckpoints === true });
   // Durable run record (crash recovery / resume): opt-in via opts.runsRoot.
   // Created BEFORE planning so any failure can mark the run INTERRUPTED; a
   // hard process crash leaves it RUNNING → recovered later by stale detection.
@@ -579,6 +589,11 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
     },
   });
   if (runState) markRunPhase(opts.runsRoot as string, runState, "EXECUTION");
+  try {
+    swarmGit.checkpoint("plan");
+  } catch {
+    // git failure is non-fatal by contract
+  }
 
   const plan: OrchestrationPlan = {
     goal: opts.goal,
@@ -875,6 +890,13 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
           },
         });
       } else if (event.type === "task_ended") {
+        // E6 wiring: checkpoint the workspace after each builder task ends
+        // (never blocks the run on git failure — createSwarmGit is tolerant).
+        try {
+          swarmGit.checkpoint(`task-${event.taskId ?? "task"}`);
+        } catch {
+          // git failure is non-fatal by contract
+        }
         const usage = taskUsageById.get(event.taskId ?? "");
         emitSwarm({
           type: "task_ended",

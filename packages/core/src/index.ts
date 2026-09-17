@@ -46,3 +46,5 @@ export * from "./verification/counterfactual";
 export * from "./verification/proof-package";
 // Security (Wave 4b): secret detection & redaction boundary
 export * from "./security/secret-guard";
+// E6: per-run git checkpoints/rollback service
+export * from "./git-service";
