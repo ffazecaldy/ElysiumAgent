@@ -607,12 +607,12 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
   // executeTool closes over the right registry; the shared instance below is
   // the fallback for tasks without one.
   const registry = new ToolRegistry();
-  for (const tool of createBuiltinTools({ allowedRoots: [workspace], network: false })) {
+  for (const tool of createBuiltinTools({ allowedRoots: [workspace] }, { network: false })) {
     registry.register(tool);
   }
   const buildRegistry = (): ToolRegistry => {
     const perTask = new ToolRegistry();
-    for (const tool of createBuiltinTools({ allowedRoots: [workspace], network: false })) {
+    for (const tool of createBuiltinTools({ allowedRoots: [workspace] }, { network: false })) {
       perTask.register(tool);
     }
     return perTask;
