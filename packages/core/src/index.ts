@@ -44,3 +44,5 @@ export type { RiskInput, RiskScore } from "./quality/risk-score";
 // Verification (E8/E10): counterfactual strength + proof package
 export * from "./verification/counterfactual";
 export * from "./verification/proof-package";
+// Security (Wave 4b): secret detection & redaction boundary
+export * from "./security/secret-guard";

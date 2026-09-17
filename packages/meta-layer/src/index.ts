@@ -10,4 +10,12 @@ export {
   hypothesisTimestamp,
 } from "./hypotheses/engine";
 export type { HypothesisEngineOptions, OrchestrationConfig } from "./hypotheses/engine";
+export * from "./fingerprint";
+export {
+  TrajectoryRecorder,
+  replayAgainst,
+  replayFingerprint,
+  stepsToTrajectory,
+} from "./replay";
+export type { ReplayStep, ReplayTool } from "./replay";
 export * from "./types";
