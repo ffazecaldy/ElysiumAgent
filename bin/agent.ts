@@ -87,6 +87,10 @@ import {
 } from "../packages/cli/src/ui";
 import { CLI_VERSION } from "../packages/cli/src/index";
 import { runSwarmGoal, planGoal, type SwarmEvent } from "../packages/cli/src/swarm-mode";
+import { gateBashCommand, collectEnvSecretValues } from "../packages/cli/src/bash-gate";
+import { DEFAULT_REPL_BASH_POLICY, replBashPolicy } from "../packages/cli/src/config";
+import { redactText } from "../packages/core/src/security/secret-guard";
+import { handleReplayCommand, handleResumeCommand } from "../packages/cli/src/repl-commands";
 import { createSwarmView, type SwarmView } from "../packages/cli/src/swarm-view";
 import { collectSkills, skillRoots, skillsPromptBlock } from "../packages/cli/src/skills";
 import { createMdRenderer } from "../packages/cli/src/md";
@@ -331,6 +335,8 @@ function wireAgentFor(
   hooks?: { stats?: SessionStats },
 ): Agent {
   const provider = makeProvider(config);
+  // SecretGuard: exact env values collected once per process (len>=8, cap 200).
+  const replEnvSecrets = collectEnvSecretValues();
   return new Agent({
     // maxTurns comes from the active effort mode; the system prompt is the
     // base prompt with the mode's suffix appended (empty for medium).
@@ -339,6 +345,21 @@ function wireAgentFor(
     tools: registry.list(),
     maxTurns: MODES[currentMode].maxTurns,
     executeTool: async (call, ctx): Promise<ToolResultMessage> => {
+      // Bash policy gate (REPL path): every shell command passes the gate
+      // before spawn — the same policy module the swarm uses. APPROVE reuses
+      // the tool's existing confirm flow (operator gets the y/N prompt).
+      if (call.name === "bash" && typeof call.arguments.command === "string") {
+        const gate = gateBashCommand(replBashPolicy(), call.arguments.command, process.cwd());
+        if (gate.action === "BLOCK") {
+          return {
+            role: "tool_result",
+            toolCallId: call.id,
+            toolName: call.name,
+            content: `bash command blocked by policy: ${gate.reason ?? "denied"}`,
+            isError: true,
+          };
+        }
+      }
       const tool = registry.get(call.name);
       if (!tool) {
         return {
@@ -370,6 +391,12 @@ function wireAgentFor(
             });
           },
         });
+        // SecretGuard boundary (REPL): redact the tool result BEFORE it
+        // returns to the agent loop / event bus. Raw output never leaves.
+        const redactedResult: ToolResultMessage = {
+          ...result,
+          content: redactText(result.content ?? "", replEnvSecrets),
+        };
         // Edit volume bookkeeping: for `write` re-read the produced file and
         // count real lines (the tool result content is a summary message, not
         // the file body). For `edit` count +/- lines in the diff-ish result.
@@ -389,15 +416,27 @@ function wireAgentFor(
             }
           }
         }
-        return {
-          role: "tool_result",
-          toolCallId: call.id,
-          toolName: call.name,
-          content: result.content,
-          isError: result.isError,
-          ...(result.details !== undefined ? { details: result.details } : {}),
-        };
+        // Session trail for /replay (best effort, never blocks execution).
+        sessionEvents.push({
+          type: "tool_call",
+          name: call.name,
+          tool: call.name,
+          input: call.arguments,
+        });
+        sessionEvents.push({
+          type: "tool_result",
+          name: call.name,
+          isError: redactedResult.isError === true,
+        });
+        return redactedResult;
       } catch (err: unknown) {
+        sessionEvents.push({
+          type: "tool_call",
+          name: call.name,
+          tool: call.name,
+          input: call.arguments,
+        });
+        sessionEvents.push({ type: "tool_result", name: call.name, isError: true });
         return {
           role: "tool_result",
           toolCallId: call.id,
@@ -717,6 +756,29 @@ async function dispatchCommand(
       sp.stop(undefined, "plan failed");
       throw err;
     }
+    return;
+  }
+  if (input === "/resume" || input.startsWith("/resume ")) {
+    const arg = input.slice(7).trim() || undefined;
+    const res = handleResumeCommand(process.cwd(), arg);
+    console.log(section("resume"));
+    for (const line of res.message.split("\n")) console.log(`  ${line}`);
+    console.log();
+    return;
+  }
+  if (input === "/replay" || input.startsWith("/replay ")) {
+    const argJson = input.slice(7).trim() || undefined;
+    const events = xo ? (xo.events as unknown[]) : [];
+    if (events.length === 0 && argJson === undefined) {
+      console.log(section("replay"));
+      console.log(dim("  no recorded events in this session to replay"));
+      console.log();
+      return;
+    }
+    const res = handleReplayCommand(events, argJson);
+    console.log(section("replay"));
+    for (const line of res.message.split("\n")) console.log(`  ${line}`);
+    console.log();
     return;
   }
   if (input === "/cost") {
@@ -1043,6 +1105,7 @@ async function dispatchCommand(
         provider: providerCfg,
         maxSubtasks: MODES[currentMode].maxSubtasks,
         signal: controller.signal,
+        runsRoot: process.cwd(),
         onEvent: (e: SwarmEvent) => {
           if (e.type === "plan") {
             sp.stop("plan ready");
@@ -1135,6 +1198,8 @@ async function dispatchCommand(
 async function runRepl(startConfig: ProviderConfig): Promise<void> {
   const registry = createToolRegistry();
   const stats = newSessionStats();
+  // Session event trail (for /replay): agent + tool events captured in order.
+  const sessionEvents: unknown[] = [];
   const state: ReplState = { config: startConfig, committed: startConfig };
   let agent = wireAgentFor(state.committed, registry, { stats });
 
@@ -1223,6 +1288,7 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
               working = w;
             },
             committed: () => state.committed,
+            events: sessionEvents,
           }),
         )
         .catch(() => undefined);
@@ -1243,6 +1309,7 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
             working = w;
           },
           committed: () => state.committed,
+          events: sessionEvents,
         }),
       )
       .catch((err: unknown) => {
@@ -1350,6 +1417,8 @@ interface ReplContext {
   setWorking: (working: boolean) => void;
   /** Live provider config (read-only accessor for commands and the statusbar). */
   committed: () => ProviderConfig;
+  /** Session event trail for /replay (tool_call/tool_result pairs, etc.). */
+  events: unknown[];
 }
 
 async function handleReplLine(input: string, xo: ReplContext): Promise<void> {

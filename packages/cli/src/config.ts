@@ -99,6 +99,27 @@ export function loadConfig(projectRoot?: string): ProviderConfig {
   return { provider: provider as ProviderName, baseUrl, apiKey, model };
 }
 
+/**
+ * Default bash policy for the interactive REPL. Conservative deny-list
+ * (destructive/escalation builtins from bash-policy) while leaving the
+ * single-user operator full network access and the whole cwd writable —
+ * the REPL runs attended, unlike swarm workers (network denied there).
+ * Opt-out: ELYSIUM_BASH_POLICY=off disables the gate entirely.
+ */
+export const DEFAULT_REPL_BASH_POLICY = {
+  denied: ["rm -rf", "git reset --hard", "git push", "sudo", "powershell -enc"],
+  writableRoots: [process.cwd()],
+  networkAllowed: true,
+} as const;
+
+/** Resolve the active REPL bash policy from the environment. */
+export function replBashPolicy(): typeof DEFAULT_REPL_BASH_POLICY | undefined {
+  if ((process.env.ELYSIUM_BASH_POLICY ?? "").toLowerCase() === "off") {
+    return undefined;
+  }
+  return DEFAULT_REPL_BASH_POLICY;
+}
+
 /** Save a single key=value to the .env file. */
 export function saveEnvValue(projectRoot: string, key: string, value: string): void {
   const envPath = path.join(projectRoot, ".env");

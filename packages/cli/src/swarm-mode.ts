@@ -50,7 +50,12 @@ import {
   riskScore,
   structuralJudge,
 } from "@elysium/core";
+import { redactObject, redactText } from "@elysium/core";
+import { collectEnvSecretValues, gateBashCommand } from "./bash-gate";
+import type { BashCommandPolicy } from "./policy/bash-policy";
 import { type TaskPathPolicy, checkPath } from "./task-ownership";
+import { finishRun, recordRunPhase as markRunPhase, startRunRecord } from "./swarm-run-store";
+import { markInterrupted } from "./run-state";
 
 // ── Public seam ───────────────────────────────────────────────────
 
@@ -106,9 +111,22 @@ export interface RunSwarmGoalOptions {
    * for the task being spawned, its write/edit tool calls are checked in
    * write mode (default-deny outside `allowed` globs) and read calls in read
    * mode (blocked only by `forbidden`); denied calls get an isError result.
-   * Absent for a task → no enforcement (backward compatible). Note: bash is
-   * NOT intercepted — a documented gap. */
+   * Absent for a task → no enforcement (backward compatible).
+   * Bash commands go through the bash-policy gate for every task (see
+   * `bashPolicy` below). */
   taskPolicies?: Map<string, TaskPathPolicy>;
+  /** Bash command policy applied to EVERY task's shell calls in this run.
+   * Default (conservative, documented in config.ts): builtin deny-list,
+   * writable roots = the run workspace, network DENIED — swarm workers are
+   * unattended and must not reach the network. Blocked commands never spawn;
+   * approval-requiring commands are refused in swarm context (no interactive
+   * approver exists there — documented choice). */
+  bashPolicy?: BashCommandPolicy;
+  /** When set, the run is recorded durably under
+   * `<runsRoot>/.elysium/runs/<runId>/elysium-run.json` (crash recovery +
+   * `resume` support). Absent → no persistence (backward compatible, keeps
+   * tests hermetic). */
+  runsRoot?: string;
 }
 
 /** Per-subtask quality-gate outcome attached to the orchestration report. */
@@ -502,6 +520,8 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
   if (opts.signal?.aborted) {
     throw new Error("swarm aborted");
   }
+  // SecretGuard: collect env values ONCE per run (exact-value redaction set).
+  const envSecretValues = collectEnvSecretValues();
   const maxSubtasks = Math.max(1, Math.floor(opts.maxSubtasks ?? DEFAULT_MAX_SUBTASKS));
   const emitSwarm = (event: SwarmEvent): void => {
     opts.onEvent?.(event);
@@ -509,6 +529,13 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
 
   // Fresh scratch workspace per RUN (all subtasks share it; left in place).
   const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "elysium-swarm-"));
+  // Durable run record (crash recovery / resume): opt-in via opts.runsRoot.
+  // Created BEFORE planning so any failure can mark the run INTERRUPTED; a
+  // hard process crash leaves it RUNNING → recovered later by stale detection.
+  const runState = opts.runsRoot
+    ? startRunRecord(opts.runsRoot, `swarm-${Date.now()}`, opts.goal)
+    : null;
+  if (runState) markRunPhase(opts.runsRoot as string, runState, "PLANNING");
   const provider: LlmProvider = new OpenAICompatibleProvider({
     baseUrl: opts.provider.baseUrl,
     apiKey: opts.provider.apiKey,
@@ -526,6 +553,7 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
     );
     planned = parsePlannerOutput(raw, opts.goal, maxSubtasks);
   } catch (error: unknown) {
+    if (runState && opts.runsRoot) markInterrupted(opts.runsRoot, runState);
     emitSwarm({
       type: "error",
       data: { scope: "planner", message: `planning LLM call failed: ${errorMessage(error)}` },
@@ -550,6 +578,7 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
       workspacePath: workspace,
     },
   });
+  if (runState) markRunPhase(opts.runsRoot as string, runState, "EXECUTION");
 
   const plan: OrchestrationPlan = {
     goal: opts.goal,
@@ -604,6 +633,13 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
     const policy = opts.taskPolicies?.get(task.id);
     const taskRegistry = policy !== undefined ? buildRegistry() : registry;
 
+    // Bash policy gate input: caller override or the conservative default.
+    const effectiveBashPolicy: BashCommandPolicy = opts.bashPolicy ?? {
+      denied: [],
+      writableRoots: [workspace],
+      networkAllowed: false,
+    };
+
     // Streamed builder text → line-batched "task_output" events for this task.
     const batcher = new StreamLineBatcher((text: string): void => {
       emitSwarm({ type: "task_output", data: { taskId: task.id, text } });
@@ -655,6 +691,29 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
         }
       }
 
+      // Bash policy gate: every shell command passes here BEFORE spawn.
+      // BLOCK/APPROVE never execute (swarm has no interactive approver);
+      // the command the model sees is the policy reason.
+      if (call.name === "bash" && typeof call.arguments.command === "string") {
+        const gate = gateBashCommand(effectiveBashPolicy, call.arguments.command, workspace);
+        if (gate.action === "BLOCK" || gate.action === "APPROVE") {
+          emitSwarm({
+            type: "task_tool",
+            data: { taskId: task.id, tool: call.name, isError: true },
+          });
+          return {
+            role: "tool_result",
+            toolCallId: call.id,
+            toolName: call.name,
+            content:
+              gate.action === "APPROVE"
+                ? `bash command requires approval and was refused in swarm context: ${gate.reason ?? "policy"}`
+                : `bash command blocked by policy: ${gate.reason ?? "denied"}`,
+            isError: true,
+          };
+        }
+      }
+
       const tool = taskRegistry.get(call.name);
       if (!tool) {
         emitSwarm({ type: "task_tool", data: { taskId: task.id, tool: call.name, isError: true } });
@@ -672,6 +731,13 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
           signal: ctx.signal,
           emit: () => {},
         });
+        // SecretGuard boundary: redact BEFORE any emission/event/return, so
+        // no secret from tool output can reach the bus, evidence or reports.
+        const redactedContent = redactText(result.content, envSecretValues);
+        const redactedDetails =
+          result.details === undefined
+            ? undefined
+            : (redactObject(result.details, envSecretValues) as Record<string, unknown>);
         emitSwarm({
           type: "task_tool",
           data: { taskId: task.id, tool: call.name, isError: result.isError },
@@ -691,9 +757,9 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
           role: "tool_result",
           toolCallId: call.id,
           toolName: call.name,
-          content: result.content,
+          content: redactedContent,
           isError: result.isError,
-          ...(result.details !== undefined ? { details: result.details } : {}),
+          ...(redactedDetails !== undefined ? { details: redactedDetails } : {}),
         };
       } catch (error: unknown) {
         return {
@@ -865,6 +931,10 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
     const levelRubric: typeof rubric = { ...rubric, threshold: levelThreshold };
     const score = await gate.evaluate(artifact, levelRubric);
     scores.push({ taskId: subtask.task.id, weighted: score.weighted, passed: score.passed });
+  }
+
+  if (runState) {
+    finishRun(opts.runsRoot as string, runState, orchestration.allPassed ? "COMPLETED" : "FAILED");
   }
 
   emitSwarm({
