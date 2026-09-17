@@ -12,7 +12,6 @@
  * "aborted"; already-running attempts settle naturally.
  */
 import { randomBytes } from "node:crypto";
-import { type EvidenceChain, type EvidenceKind } from "./evidence";
 import { type FailureCause, classifyFailure } from "../quality/failure-cause";
 import type { HarnessEvent } from "../types/events";
 import type {
@@ -24,6 +23,7 @@ import type {
   SubagentTask,
   SubtaskReport,
 } from "../types/orchestration";
+import type { EvidenceChain, EvidenceKind } from "./evidence";
 
 /** Callback evaluating a single subtask attempt; receives a fresh context only. */
 type CriticFn = (task: SubagentTask, result: SubagentResult) => Promise<CriticVerdict>;
