@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<!--
+  Elysium Puter To-Do — proof of concept for Puter.js integration.
+
+  Puter.js requirement: this page MUST be served over HTTP (not file://).
+  Local preview:
+      cd web/puter-todo && python -m http.server 8188
+      → open http://localhost:8188
+  Or deploy: `puter hosting put . elysium-todo` (Puter CLI).
+
+  Data lives in the SIGNED-IN USER'S Puter KV account (user-pays, no backend).
+-->
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Elysium To-Do · Puter</title>
+<script src="https://js.puter.com/v2/"></script>
+<style>
+  :root {
+    --bg: #050805;
+    --surface: #0a120a;
+    --surface2: #0e1a0e;
+    --border: #1d3a1d;
+    --neon: #34ff6e;
+    --lime: #86efac;
+    --dim: #4ade8055;
+    --muted: #9ca3af;
+    --text: #e5e7eb;
+    --red: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font: 14px/1.5 "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+    display: flex; justify-content: center; padding: 40px 16px;
+  }
+  .wrap { width: 100%; max-width: 620px; }
+  h1 { color: var(--neon); font-size: 18px; letter-spacing: 2px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 20px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; padding: 16px; margin-bottom: 14px;
+  }
+  button {
+    font: inherit; cursor: pointer; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface2); color: var(--text);
+    padding: 7px 14px;
+  }
+  button.primary { background: #052e16; border-color: var(--neon); color: var(--neon); font-weight: 600; }
+  button.primary:hover { background: #064e3b; }
+  button.ghost:hover { border-color: var(--neon); }
+  input[type="text"] {
+    font: inherit; flex: 1; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+  }
+  input[type="text"]:focus { outline: none; border-color: var(--neon); }
+  .row { display: flex; gap: 8px; }
+  .bar { display: flex; justify-content: space-between; align-items: center; margin: 14px 2px 8px; }
+  .filters button { padding: 3px 10px; font-size: 12px; opacity: .6; }
+  .filters button.active { opacity: 1; border-color: var(--neon); color: var(--neon); }
+  .count { color: var(--muted); font-size: 12px; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 6px;
+  }
+  li.done .text { text-decoration: line-through; color: var(--muted); }
+  li input[type="checkbox"] { width: 16px; height: 16px; accent-color: #16a34a; cursor: pointer; }
+  li .text { flex: 1; word-break: break-word; }
+  li .del { border: none; background: none; color: var(--muted); font-size: 16px; padding: 0 4px; }
+  li .del:hover { color: var(--red); }
+  .empty { color: var(--muted); text-align: center; padding: 26px 0; border: 1px dashed var(--border); border-radius: 8px; }
+  .banner { border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; font-size: 12px; }
+  .banner.err { background: #450a0a; color: var(--red); border: 1px solid #7f1d1d; }
+  .banner.info { background: var(--surface2); color: var(--lime); border: 1px solid var(--border); }
+  footer { margin-top: 22px; text-align: center; font-size: 11px; color: var(--muted); }
+  footer a { color: var(--lime); }
+  .hidden { display: none; }
+  .user { color: var(--lime); font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ELYSIUM TO-DO</h1>
+  <div class="sub">proof of concept · Puter KV (user-pays) · nessun backend</div>
+
+  <div id="auth-card" class="card hidden">
+    <p style="margin-top:0">Accedi con il tuo account Puter per salvare la lista nel tuo cloud.</p>
+    <button id="signin" class="primary">Sign in con Puter</button>
+  </div>
+
+  <div id="banner" class="banner info hidden"></div>
+
+  <div id="app" class="hidden">
+    <div class="row" style="margin-bottom:4px">
+      <span class="user" id="whoami"></span>
+      <span style="flex:1"></span>
+      <button id="signout" class="ghost" style="font-size:12px; padding:3px 10px">sign out</button>
+    </div>
+    <div class="card">
+      <div class="row">
+        <input id="new-todo" type="text" placeholder="nuovo task… (Invio)" autocomplete="off" />
+        <button id="add" class="primary">Aggiungi</button>
+      </div>
+    </div>
+    <div class="bar">
+      <div class="filters" id="filters">
+        <button data-f="all" class="active">tutti</button>
+        <button data-f="active">attivi</button>
+        <button data-f="done">fatti</button>
+      </div>
+      <span class="count" id="count"></span>
+    </div>
+    <ul id="list"></ul>
+    <div id="empty" class="empty hidden">nessun task — aggiungine uno sopra</div>
+  </div>
+
+  <footer>
+    Powered by <a href="https://developer.puter.com" target="_blank" rel="noopener">Puter</a>
+    · Elysium Harness PoC
+  </footer>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const KEY = "elysium:todos:v1";
+  const $ = (id) => document.getElementById(id);
+  let todos = [];
+  let filter = "all";
+
+  const banner = (msg, kind = "info") => {
+    const b = $("banner");
+    b.textContent = msg;
+    b.className = "banner " + kind;
+    b.classList.remove("hidden");
+  };
+  const hideBanner = () => $("banner").classList.add("hidden");
+
+  async function save() {
+    try { await puter.kv.set(KEY, JSON.stringify(todos)); }
+    catch (e) { banner("Errore salvataggio KV: " + e.message, "err"); }
+  }
+
+  async function load() {
+    try {
+      const v = await puter.kv.get(KEY);
+      todos = v ? JSON.parse(v) : [];
+    } catch (e) { banner("Errore lettura KV: " + e.message, "err"); todos = []; }
+  }
+
+  function render() {
+    const list = $("list");
+    list.innerHTML = "";
+    const visible = todos.filter((t) =>
+      filter === "all" ? true : filter === "done" ? t.done : !t.done
+    );
+    for (const t of visible) {
+      const li = document.createElement("li");
+      if (t.done) li.className = "done";
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = t.done;
+      cb.addEventListener("change", async () => {
+        t.done = cb.checked; await save(); render();
+      });
+      const span = document.createElement("span");
+      span.className = "text"; span.textContent = t.text;
+      const del = document.createElement("button");
+      del.className = "del"; del.title = "elimina"; del.textContent = "×";
+      del.addEventListener("click", async () => {
+        todos = todos.filter((x) => x.id !== t.id); await save(); render();
+      });
+      li.append(cb, span, del);
+      list.appendChild(li);
+    }
+    $("empty").classList.toggle("hidden", visible.length > 0);
+    const active = todos.filter((t) => !t.done).length;
+    $("count").textContent = `${active} attivi / ${todos.length} totali`;
+  }
+
+  function wireApp() {
+    const add = async () => {
+      const input = $("new-todo");
+      const text = input.value.trim();
+      if (!text) return;
+      todos.unshift({ id: crypto.randomUUID(), text, done: false, created: Date.now() });
+      input.value = "";
+      await save(); render();
+    };
+    $("add").addEventListener("click", add);
+    $("new-todo").addEventListener("keydown", (e) => { if (e.key === "Enter") add(); });
+    $("filters").addEventListener("click", (e) => {
+      if (e.target.dataset.f === undefined) return;
+      filter = e.target.dataset.f;
+      for (const b of $("filters").children) b.classList.toggle("active", b === e.target);
+      render();
+    });
+    $("signout").addEventListener("click", () => { puter.auth.signOut(); location.reload(); });
+  }
+
+  async function boot() {
+    if (!puter.auth.isSignedIn()) {
+      $("auth-card").classList.remove("hidden");
+      $("signin").addEventListener("click", async () => {
+        try { await puter.auth.signIn(); location.reload(); }
+        catch (e) { banner("Sign-in annullato: " + e.message, "err"); }
+      });
+      return;
+    }
+    const user = await puter.auth.getUser();
+    $("whoami").textContent = "· " + (user.username || user.email || "puter user");
+    $("app").classList.remove("hidden");
+    wireApp();
+    await load();
+    render();
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
