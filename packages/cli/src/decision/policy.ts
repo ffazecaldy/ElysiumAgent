@@ -25,12 +25,28 @@ export interface DecisionPolicyConfig {
   escalateAtRisk: number;
   /** Confidence below which the semantic signal is treated as uncertain. */
   uncertainBelow: number;
+  /** Noul probability of "obvious pass" at/above which critic triage may skip. */
+  skipCriticObviousPass: number;
+  /** Confidence required on the triage answers before skipping the critic. */
+  skipCriticConfidence: number;
 }
 
 export const DEFAULT_DECISION_POLICY: DecisionPolicyConfig = {
   escalateAtRisk: 0.7,
   uncertainBelow: 0.5,
+  skipCriticObviousPass: 0.9,
+  skipCriticConfidence: 0.8,
 };
+
+/** Deterministic risk levels in escalation order (never steps down). */
+const LEVEL_ORDER = ["low", "medium", "high"] as const;
+export type RiskLevel = (typeof LEVEL_ORDER)[number];
+
+/** Step a deterministic risk level UP (never down) — semantic may only escalate. */
+export function escalateRiskLevel(level: RiskLevel): RiskLevel {
+  const idx = LEVEL_ORDER.indexOf(level);
+  return LEVEL_ORDER[Math.min(idx + 1, LEVEL_ORDER.length - 1)] ?? "high";
+}
 
 /** Resolved outcome for one gated decision. */
 export interface DecisionOutcome {

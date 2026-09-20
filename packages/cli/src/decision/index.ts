@@ -18,6 +18,22 @@ export {
   type ScoreQuestion,
 } from "./provider";
 export {
+  approvalToSwarmAction,
+  judgeEvidenceStrength,
+  refineFailureCause,
+  refineRisk,
+  triageCritic,
+  type HookContext,
+  type SwarmAction,
+} from "./swarm-hooks";
+export {
+  initDecisionRuntime,
+  getDecisionRuntime,
+  resetDecisionRuntime,
+  setDecisionSink,
+  type DecisionRuntime,
+} from "./runtime";
+export {
   parseSystemOneAnswers,
   questionToWire,
   TypeSafeDecisionProvider,

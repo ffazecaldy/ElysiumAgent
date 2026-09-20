@@ -55,6 +55,9 @@ import { collectEnvSecretValues, gateBashCommand } from "./bash-gate";
 import type { BashCommandPolicy } from "./policy/bash-policy";
 import { markInterrupted } from "./run-state";
 import { createSwarmGit } from "./swarm-git";
+import { triageCritic, refineFailureCause, type HookContext } from "./decision/swarm-hooks";
+import type { DecisionProvider } from "./decision/provider";
+import type { DecisionMode } from "./decision/policy";
 import { finishRun, recordRunPhase as markRunPhase, startRunRecord } from "./swarm-run-store";
 import { type TaskPathPolicy, checkPath } from "./task-ownership";
 
@@ -134,6 +137,14 @@ export interface RunSwarmGoalOptions {
    * task's checkpoint first. Default FALSE (no repo created — back-compat
    * and hermetic tests); the interactive REPL enables it. */
   gitCheckpoints?: boolean;
+  /** Optional Decision Layer evaluator (Jev/System-One seam). Absent or
+   * unavailable → the swarm behaves exactly as before. Consultations are
+   * recorded as decision fingerprints and emitted as `custom` events. */
+  decisionEvaluator?: DecisionProvider;
+  /** Decision Layer mode. Default "off": nothing is consulted, nothing
+   * changes. "shadow" consults + records only; "enforce" lets the policy
+   * refine within its escalation-only bounds. NEVER set automatically. */
+  decisionMode?: DecisionMode;
 }
 
 /** Per-subtask quality-gate outcome attached to the orchestration report. */
@@ -831,7 +842,51 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
   };
 
   // ── (3) CRITIC — fresh context: ONLY task + this attempt's result ──
+  // Decision Layer (GAP 4/3): when a decisionEvaluator is provided, every
+  // critic call passes through triage (shadow: record only, critic always
+  // runs; enforce: policy may skip) and every failing verdict's UNKNOWN
+  // causes may be refined by the failure-cause fallback.
+  const decisionRunStamp = Date.now().toString(36);
+  const decisionCtx: HookContext | null =
+    opts.decisionEvaluator !== undefined && (opts.decisionMode ?? "off") !== "off"
+      ? {
+          evaluator: opts.decisionEvaluator.available() ? opts.decisionEvaluator : null,
+          mode: (opts.decisionMode ?? "off") as DecisionMode,
+          runId: `swarm-${decisionRunStamp}`,
+          taskId: null,
+          record: (input) => {
+            emitSwarm({
+              type: "error",
+              data: {
+                scope: "decision",
+                taskId: input.state.taskId as string | undefined,
+                message: JSON.stringify({
+                  decision: input.useCase,
+                  mode: input.mode,
+                  verdict: input.outcome.verdict,
+                  semantic: input.semantic?.verdict ?? null,
+                  provider: input.providerId,
+                }),
+              },
+            } as never);
+          },
+        }
+      : null;
   const critic = async (task: SubagentTask, result: SubagentResult): Promise<CriticVerdict> => {
+    // Triage (shadow: record-only; the critic always runs below).
+    if (decisionCtx !== null) {
+      const taskCtx: HookContext = { ...decisionCtx, taskId: task.id };
+      try {
+        await triageCritic(taskCtx, {
+          taskGoal: task.goal,
+          acceptanceCriteria: task.acceptanceCriteria ?? [],
+          artifacts: result.artifacts ?? [],
+          summary: result.summary,
+        });
+      } catch {
+        // triage failure → historical path (critic runs)
+      }
+    }
     emitSwarm({ type: "critic", data: { taskId: task.id, phase: "start" } });
     try {
       const raw = await completeOnce(
