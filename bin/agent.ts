@@ -63,6 +63,17 @@ import {
   saveEnvValue,
 } from "../packages/cli/src/config";
 import { DEFAULT_REPL_BASH_POLICY, replBashPolicy } from "../packages/cli/src/config";
+import {
+  type DecisionProvider,
+  buildBashGrayZone,
+  combineDecision,
+  minimizeState,
+} from "../packages/cli/src/decision";
+import {
+  getDecisionRuntime,
+  makeLazyDecisionRecorder,
+  setDecisionSink,
+} from "../packages/cli/src/decision/runtime";
 import { CLI_VERSION } from "../packages/cli/src/index";
 import { probeServer, readMcpConfig } from "../packages/cli/src/mcp-client";
 import { createMdRenderer } from "../packages/cli/src/md";
@@ -337,6 +348,16 @@ function wireAgentFor(
   const provider = makeProvider(config);
   // SecretGuard: exact env values collected once per process (len>=8, cap 200).
   const replEnvSecrets = collectEnvSecretValues();
+  const sessionStamp = Date.now().toString(36);
+  // Decision Layer (shadow-first): provider + mode from env, recorder emits
+  // decision fingerprints on the session event trail.
+  const decisionRuntime = getDecisionRuntime();
+  const decisionLayerActive: "off" | "shadow" | "enforce" = decisionRuntime.active
+    ? decisionRuntime.mode
+    : "off";
+  const decisionProvider: DecisionProvider = decisionRuntime.provider;
+  const recordDecision = makeLazyDecisionRecorder(() => `repl-${sessionStamp}`);
+  const currentRunId = (): string => `repl-${sessionStamp}`;
   return new Agent({
     // maxTurns comes from the active effort mode; the system prompt is the
     // base prompt with the mode's suffix appended (empty for medium).
@@ -349,7 +370,38 @@ function wireAgentFor(
       // before spawn — the same policy module the swarm uses. APPROVE reuses
       // the tool's existing confirm flow (operator gets the y/N prompt).
       if (call.name === "bash" && typeof call.arguments.command === "string") {
-        const gate = gateBashCommand(replBashPolicy(), call.arguments.command, process.cwd());
+        const command = call.arguments.command;
+        const gate = gateBashCommand(replBashPolicy(), command, process.cwd());
+        // Decision Layer (UC#1, shadow): gray-zone only — deterministic
+        // DENY/ALLOW that are unambiguous never reach the provider.
+        if (decisionLayerActive && gate.action === "APPROVE") {
+          try {
+            const question = buildBashGrayZone({
+              command,
+              cwd: process.cwd(),
+              writableRoots: [...DEFAULT_REPL_BASH_POLICY.writableRoots],
+              networkAllowed: DEFAULT_REPL_BASH_POLICY.networkAllowed,
+            });
+            const evaluation = await decisionProvider.evaluate(
+              minimizeState(question.state, replEnvSecrets),
+              question.questions,
+            );
+            const combined = combineDecision("REQUIRE_APPROVAL", evaluation, decisionLayerActive);
+            recordDecision({
+              runId: currentRunId(),
+              taskId: null,
+              useCase: "bash-gray-zone",
+              providerId: decisionProvider.id,
+              mode: decisionLayerActive,
+              outcome: combined.outcome,
+              semantic: combined.shadowSemantic,
+              evaluation,
+              state: question.state,
+            });
+          } catch {
+            // decision layer failure never blocks the historical path
+          }
+        }
         if (gate.action === "BLOCK") {
           return {
             role: "tool_result",
@@ -1204,6 +1256,10 @@ async function runRepl(startConfig: ProviderConfig): Promise<void> {
   const stats = newSessionStats();
   // Session event trail (for /replay): agent + tool events captured in order.
   const sessionEvents: unknown[] = [];
+  // Decision fingerprints ride the same trail (/replay can inspect them).
+  setDecisionSink((event) => {
+    sessionEvents.push(event);
+  });
   const state: ReplState = { config: startConfig, committed: startConfig };
   let agent = wireAgentFor(state.committed, registry, { stats });
 

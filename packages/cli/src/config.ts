@@ -120,6 +120,16 @@ export function replBashPolicy(): typeof DEFAULT_REPL_BASH_POLICY | undefined {
   return DEFAULT_REPL_BASH_POLICY;
 }
 
+/** Decision Layer mode (off | shadow | enforce). Default: shadow when a
+ * TYPESAFE_API_KEY is present, else off — NEVER enforce automatically. */
+export function decisionMode(): "off" | "shadow" | "enforce" {
+  const raw = (process.env.ELYSIUM_DECISION_MODE ?? "").toLowerCase();
+  if (raw === "enforce") return "enforce";
+  if (raw === "off") return "off";
+  if (raw === "shadow") return "shadow";
+  return process.env.TYPESAFE_API_KEY ? "shadow" : "off";
+}
+
 /** Save a single key=value to the .env file. */
 export function saveEnvValue(projectRoot: string, key: string, value: string): void {
   const envPath = path.join(projectRoot, ".env");

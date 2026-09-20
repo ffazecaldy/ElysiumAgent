@@ -226,6 +226,39 @@ Metrics are defined in `plan.md` §Measurement; the committed baseline lives in 
 
 Full model: `docs/architecture.md` §4.
 
+## Decision Layer (optional coprocessor, off by default)
+
+```
+DETERMINISTIC RULES → [semantic gray-zone judgment] → DECISION POLICY → ACTION
+```
+
+An optional **decision coprocessor** for structured, semantic judgment calls that sit between
+hard rules and generative LLM calls. The reference provider is **TypeSafe Jev** (System One):
+it does NOT write code, generate text, or replace the critic — it answers atomic typed questions
+(`Choice`/`Score`/`Noul`) with calibrated probabilities. Jev is **never required to run Elysium**:
+without a key the harness behaves exactly as before.
+
+- **Modes** (`ELYSIUM_DECISION_MODE`): `off` (default without key) · `shadow` (default with
+  `TYPESAFE_API_KEY`: Jev is consulted, its answer recorded, behavior unchanged) · `enforce`
+  (opt-in only, never automatic). Even in enforce mode the semantic layer may only **escalate**
+  (ALLOW → REQUIRE_APPROVAL); a deterministic DENY is untouchable and a deterministic
+  REQUIRE_APPROVAL cannot be relaxed.
+- **Use cases wired (shadow)**: bash gray-zone (ambiguous commands after the deterministic
+  gate), critic triage (would the fresh critic be needed?), E8 evidence strength (semantic layer
+  over deterministic exit-code facts), E4 risk refinement (semantic risk over the deterministic
+  impact level), E5 UNKNOWN failure-cause fallback (Choice over the existing taxonomy only).
+- **Privacy**: every state passes SecretGuard redaction + strict field allowlist + caps
+  (`decision/sanitize.ts`) — no env, no raw output, no credentials, no full repo ever leaves.
+- **Records**: every consultation emits a **decision fingerprint** (`D-<run>-<n>:<statehash>`)
+  on the event trail (`/replay` shows them): verdict, semantic verdict, confidence, thresholds,
+  latency, fallback reason, state hash.
+- **Fallback**: missing key, timeout, HTTP error, malformed response → historical behavior,
+  the run continues. Thresholds live in `decision/policy.ts` (`escalateAtRisk`, `uncertainBelow`),
+  to be calibrated on recorded shadow traffic before any enforce usage.
+
+Not included (future work): E11 self-learning on decisions, automatic threshold calibration,
+model/skill routing in enforce mode, new tool primitives.
+
 ## Documentation
 
 - `docs/architecture.md` — normative architecture, public interfaces, state model, telemetry format
