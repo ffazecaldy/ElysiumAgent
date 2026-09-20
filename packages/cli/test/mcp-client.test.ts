@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { probeServer, readMcpConfig, type McpServerConfig } from "../src/mcp-client";
+import { type McpServerConfig, probeServer, readMcpConfig } from "../src/mcp-client";
 
 /** Fake MCP server: answers initialize + tools/list over stdout, one JSON per line. */
 const FAKE_SERVER_SCRIPT = `

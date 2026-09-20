@@ -148,7 +148,7 @@ export class Session {
       id: entryId(this.counter),
       parentId: target,
       timestamp: nowIso(),
-      data: { kind: "meta", label: "leaf:" + (target ?? "") },
+      data: { kind: "meta", label: `leaf:${target ?? ""}` },
     };
     this.log.push(marker);
     this.persist(marker);

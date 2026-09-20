@@ -29,7 +29,7 @@
  * Non-TTY (piped/tests): nothing is redrawn — events degrade to compact
  * linear lines, so piped output stays deterministic.
  */
-import { cyan, dim, green, lime, magenta, neon, red, stripAnsi, yellow, marks } from "./ui";
+import { cyan, dim, green, lime, magenta, marks, neon, red, stripAnsi, yellow } from "./ui";
 
 /** Maximum simultaneous subagent panes (the "max 3 visible" rule). */
 export const MAX_PANES = 3;

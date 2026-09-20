@@ -2,11 +2,11 @@
  * graceful degradation (no CLI installed in CI → unavailable, no throw). */
 import { describe, expect, it } from "vitest";
 import {
+  type CloudIntegrationProvider,
   getCloudProvider,
   listCloudProviders,
   registerCloudProvider,
   resetCloudProviders,
-  type CloudIntegrationProvider,
 } from "../src/cloud/provider";
 import { puterProvider } from "../src/cloud/puter";
 

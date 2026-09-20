@@ -8,14 +8,14 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { riskScore } from "../../core/src/quality/risk-score";
 import {
+  StreamLineBatcher,
+  type SwarmEvent,
   parseCriticVerdict,
   parsePlannerOutput,
   runSwarmGoal,
-  StreamLineBatcher,
-  type SwarmEvent,
 } from "../src/swarm-mode";
-import { riskScore } from "../../core/src/quality/risk-score";
 
 /** A planner answer with one valid subtask plus ignored noise around it. */
 const VALID_PLAN = `noise before

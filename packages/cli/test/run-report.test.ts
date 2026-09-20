@@ -1,8 +1,8 @@
 /** run-report tests: section assembly per status, provenance blocks,
  * graceful degradation on malformed/empty input. */
 import { describe, expect, it } from "vitest";
-import { buildRunReport } from "../src/run-report";
 import type { PhaseStat } from "../src/observability";
+import { buildRunReport } from "../src/run-report";
 
 const phases: PhaseStat[] = [
   { name: "Planning", ms: 3200, tokens: 1800, result: "ok" },

@@ -4,8 +4,8 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import type { Hypothesis } from "../types";
 import { isValidChange } from "../hypotheses/engine";
+import type { Hypothesis } from "../types";
 
 export interface HypothesisStoreOptions {
   filePath: string;

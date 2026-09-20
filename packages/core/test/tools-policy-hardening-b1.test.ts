@@ -150,6 +150,7 @@ describe("bash tool returns isError results, never throws", () => {
       expect(result.content).toContain("timed out");
     } finally {
       if (previous === undefined) {
+        // biome-ignore lint/performance/noDelete: env cleanup requires delete (unset, not undefined)
         delete process.env.ELYSIUM_BASH_TIMEOUT_MS;
       } else {
         process.env.ELYSIUM_BASH_TIMEOUT_MS = previous;

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 /**
  * B2 — Credentials + Ctrl+C hardening.
  *
@@ -19,8 +20,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
-import type { LlmRequest, LlmProvider, StreamEvent } from "@elysium/core";
+import type { LlmProvider, LlmRequest, StreamEvent } from "@elysium/core";
 import { Agent, MockProvider } from "@elysium/core";
 import { describe, expect, it } from "vitest";
 
@@ -52,7 +52,7 @@ function runRepl(lines: string[], timeoutMs = 90_000): ReplHandle {
   const sandboxEnv = path.join(sandbox, ".env");
   fs.writeFileSync(sandboxEnv, "ELYSIUM_PROVIDER=mock\n", "utf-8");
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "b2-argv-"));
-  const input = lines.join("\n") + "\n";
+  const input = `${lines.join("\n")}\n`;
 
   const runner = spawnSync("pnpm", ["agent", "--provider", "mock"], {
     input,

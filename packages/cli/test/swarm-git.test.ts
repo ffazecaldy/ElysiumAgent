@@ -3,13 +3,13 @@
  * a real git repo with elysium/* tags in the run workspace). */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSwarmGit } from "../src/swarm-git";
 import { runSwarmGoal } from "../src/swarm-mode";
-import http from "node:http";
-import type { AddressInfo } from "node:net";
 
 const tmpDirs: string[] = [];
 function makeTempDir(): string {

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 /**
  * B5 — Generalized command-kill coverage.
  *
@@ -15,7 +16,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 function projectRoot(): string {
@@ -37,7 +37,7 @@ function runReplSession(
   // Keep the process stateless: redirect config/cache to an isolated temp dir.
   const argvOverride = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "b5-")), "argv");
   fs.mkdirSync(argvOverride, { recursive: true });
-  const input = lines.join("\n") + "\n";
+  const input = `${lines.join("\n")}\n`;
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     // Redirect any user-level state that could leak real keys/keys prompts.

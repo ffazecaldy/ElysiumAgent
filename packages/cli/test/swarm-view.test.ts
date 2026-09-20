@@ -5,11 +5,11 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_PANES,
+  type SwarmSnapshot,
   assignPanes,
   createSwarmView,
   statusGlyph,
   truncate,
-  type SwarmSnapshot,
 } from "../src/swarm-view";
 
 describe("assignPanes", () => {

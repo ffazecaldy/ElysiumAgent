@@ -2,8 +2,8 @@
  * Tests for the deterministic evidence auditor and failure-cause taxonomy.
  */
 import { describe, expect, it } from "vitest";
-import { classifyFailure } from "../src/quality/failure-cause";
 import { auditTestFiles } from "../src/quality/evidence-audit";
+import { classifyFailure } from "../src/quality/failure-cause";
 
 describe("classifyFailure", () => {
   it("classifies missing dependency with full confidence", () => {

@@ -9,7 +9,7 @@
  * Every entry point is total: `readMcpConfig` returns {} on anything unexpected
  * and `probeServer` always resolves to a result, never throws.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 

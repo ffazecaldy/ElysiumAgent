@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import fs from "node:fs";
+import path from "node:path";
 /**
  * Elysium Harness — AI Agent CLI
  *
@@ -31,68 +33,38 @@
  *   - Two SIGINTs within 3 seconds while IDLE exit the process (code 0).
  */
 import readline from "node:readline";
-import fs from "node:fs";
-import path from "node:path";
 import {
   Agent,
+  type AgentMessage,
+  type EventBus,
+  MissingApiKeyError,
   MockProvider,
   OpenAICompatibleProvider,
-  ToolRegistry,
-  createBuiltinTools,
-  MissingApiKeyError,
   ProviderInitializationError,
   RecoverableCliError,
-  UnknownProviderError,
-  type ToolResultMessage,
   type ToolCallPart,
-  type AgentMessage,
+  ToolRegistry,
+  type ToolResultMessage,
+  UnknownProviderError,
+  createBuiltinTools,
   makeEvent,
-  type EventBus,
 } from "@elysium/core";
 import { EventBus as RealEventBus } from "@elysium/core";
+import { collectEnvSecretValues, gateBashCommand } from "../packages/cli/src/bash-gate";
 import {
-  loadConfig,
-  saveEnvValue,
-  describeConfig,
-  maskSecret,
-  PROVIDER_NAMES,
   PROVIDER_MODELS,
+  PROVIDER_NAMES,
   PROVIDER_URLS,
   type ProviderConfig,
   type ProviderName,
+  describeConfig,
+  loadConfig,
+  maskSecret,
+  saveEnvValue,
 } from "../packages/cli/src/config";
-import {
-  dim,
-  bold,
-  white,
-  cyan,
-  green,
-  red,
-  yellow,
-  marks,
-  section,
-  kv,
-  spinner,
-  thinkingSpinner,
-  magenta,
-  translateProviderError,
-  neon,
-  welcomeScreen,
-  statusBar,
-  helpScreen,
-  HELP_CATALOG,
-  setTheme,
-  currentTheme,
-  playRainIntro,
-} from "../packages/cli/src/ui";
-import { CLI_VERSION } from "../packages/cli/src/index";
-import { runSwarmGoal, planGoal, type SwarmEvent } from "../packages/cli/src/swarm-mode";
-import { gateBashCommand, collectEnvSecretValues } from "../packages/cli/src/bash-gate";
 import { DEFAULT_REPL_BASH_POLICY, replBashPolicy } from "../packages/cli/src/config";
-import { redactText } from "../packages/core/src/security/secret-guard";
-import { handleReplayCommand, handleResumeCommand } from "../packages/cli/src/repl-commands";
-import { createSwarmView, type SwarmView } from "../packages/cli/src/swarm-view";
-import { collectSkills, skillRoots, skillsPromptBlock } from "../packages/cli/src/skills";
+import { CLI_VERSION } from "../packages/cli/src/index";
+import { probeServer, readMcpConfig } from "../packages/cli/src/mcp-client";
 import { createMdRenderer } from "../packages/cli/src/md";
 import {
   addMemoryEntry,
@@ -100,7 +72,35 @@ import {
   loadMemory,
   memoryPromptBlock,
 } from "../packages/cli/src/memory-store";
-import { probeServer, readMcpConfig } from "../packages/cli/src/mcp-client";
+import { handleReplayCommand, handleResumeCommand } from "../packages/cli/src/repl-commands";
+import { collectSkills, skillRoots, skillsPromptBlock } from "../packages/cli/src/skills";
+import { type SwarmEvent, planGoal, runSwarmGoal } from "../packages/cli/src/swarm-mode";
+import { type SwarmView, createSwarmView } from "../packages/cli/src/swarm-view";
+import {
+  HELP_CATALOG,
+  bold,
+  currentTheme,
+  cyan,
+  dim,
+  green,
+  helpScreen,
+  kv,
+  magenta,
+  marks,
+  neon,
+  playRainIntro,
+  red,
+  section,
+  setTheme,
+  spinner,
+  statusBar,
+  thinkingSpinner,
+  translateProviderError,
+  welcomeScreen,
+  white,
+  yellow,
+} from "../packages/cli/src/ui";
+import { redactText } from "../packages/core/src/security/secret-guard";
 
 /**
  * PROJECT_ROOT governs where .env is read/written. The ELYSIUM_PROJECT_ROOT
@@ -494,10 +494,8 @@ function wireAgentFor(
         const m = (e.data as { message?: ToolResultMessage }).message;
         if (m) {
           const status = m.isError ? red("err") : green("ok");
-          const preview = m.content.length > 90 ? m.content.slice(0, 90) + "…" : m.content;
-          console.log(
-            `\n  ${dim("tool " + m.toolName + " " + status + "  " + preview.replace(/\n/g, " "))}`,
-          );
+          const preview = m.content.length > 90 ? `${m.content.slice(0, 90)}…` : m.content;
+          console.log(`\n  ${dim(`tool ${m.toolName} ${status}  ${preview.replace(/\n/g, " ")}`)}`);
         }
       }
     },
@@ -507,19 +505,24 @@ function wireAgentFor(
 // ── Edit-distance for the /model suggestion ──────────────────────
 
 function editDistance(a: string, b: string): number {
-  const dp = Array.from({ length: a.length + 1 }, () => new Array<number>(b.length + 1).fill(0));
-  for (let i = 0; i <= a.length; i++) dp[i]![0] = i;
-  for (let j = 0; j <= b.length; j++) dp[0]![j] = j;
+  const dp: number[][] = Array.from({ length: a.length + 1 }, () =>
+    new Array<number>(b.length + 1).fill(0),
+  );
+  for (let i = 0; i <= a.length; i++) (dp[i] ?? [])[0] = i;
+  for (let j = 0; j <= b.length; j++) (dp[0] ?? [])[j] = j;
   for (let i = 1; i <= a.length; i++) {
     for (let j = 1; j <= b.length; j++) {
-      dp[i]![j] = Math.min(
-        dp[i - 1]![j]! + 1,
-        dp[i]![j - 1]! + 1,
-        dp[i - 1]![j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1),
+      const row = dp[i];
+      const prev = dp[i - 1];
+      if (row === undefined || prev === undefined) continue;
+      row[j] = Math.min(
+        (prev[j] ?? 0) + 1,
+        (row[j - 1] ?? 0) + 1,
+        (prev[j - 1] ?? 0) + (a[i - 1] === b[j - 1] ? 0 : 1),
       );
     }
   }
-  return dp[a.length]![b.length]!;
+  return dp[a.length]?.[b.length] ?? 0;
 }
 
 function suggestProvider(name: string): string | null {
@@ -580,7 +583,7 @@ interface ReplState {
 
 function renderRecoverableError(title: string, action: string): void {
   console.log(`\n  ${yellow(marks.warn)} ${bold(title)}`);
-  if (action) console.log(`  ${dim(marks.info + " " + action)}`);
+  if (action) console.log(`  ${dim(`${marks.info} ${action}`)}`);
   console.log();
 }
 
@@ -599,7 +602,7 @@ async function dispatchCommand(
   }
   if (input === "/model") {
     console.log(`\n  Current: ${describeConfig(state.config)}`);
-    console.log(`\n  Available providers:`);
+    console.log("\n  Available providers:");
     for (const [k, v] of Object.entries(PROVIDER_NAMES)) {
       console.log(`    ${k === state.committed.provider ? "* " : "  "}${k.padEnd(12)} ${v}`);
     }
@@ -610,7 +613,7 @@ async function dispatchCommand(
     const arg = input.slice(5).trim();
     if (arg.length === 0) {
       // Table of the 4 modes; asterisk marks the active one.
-      console.log(`\n  Effort modes (session-only, not saved to .env):`);
+      console.log("\n  Effort modes (session-only, not saved to .env):");
       for (const m of VALID_MODES) {
         const active = m === currentMode;
         console.log(`    ${active ? "*" : " "} ${m.padEnd(8)} ${MODES[m].label}`);
@@ -688,8 +691,8 @@ async function dispatchCommand(
         "Usage: /key <provider> <api-key> — no spaces inside the key",
       );
     }
-    const prov = parts[0]!;
-    const key = parts[1]!;
+    const prov = parts[0] ?? "";
+    const key = parts[1] ?? "";
     if (!(prov in PROVIDER_URLS) && prov !== "mock") {
       throw new UnknownProviderError(prov);
     }
@@ -857,7 +860,7 @@ async function dispatchCommand(
     const servers = readMcpConfig(PROJECT_ROOT);
     const names = Object.keys(servers);
     if (names.length === 0) {
-      console.log(`\n  No MCP servers configured. Add a .mcp.json in the project root:`);
+      console.log("\n  No MCP servers configured. Add a .mcp.json in the project root:");
       console.log(
         `  ${dim(`{ "mcpServers": { "nome": { "command": "npx", "args": ["-y", "pkg"] } } }`)}\n`,
       );
@@ -909,7 +912,7 @@ async function dispatchCommand(
     inThink = false;
     xo.stats.prompts.push(input);
     seam?.start(xo.getAgent());
-    let result;
+    let result: Awaited<ReturnType<Agent["run"]>>;
     try {
       result = await xo.getAgent().run(reviewPrompt);
     } finally {
@@ -962,7 +965,7 @@ async function dispatchCommand(
     return;
   }
   if (input === "/connections") {
-    console.log(`\n  Providers (configured in .env or via /key):`);
+    console.log("\n  Providers (configured in .env or via /key):");
     for (const [name, url] of Object.entries(PROVIDER_URLS)) {
       const configured =
         name in CREDENTIAL_LESS ? "ready (no key needed)" : "key required (/key <provider> <key>)";
@@ -976,7 +979,7 @@ async function dispatchCommand(
   if (input === "/skills") {
     if (SKILLS.length === 0) {
       console.log(
-        `\n  No skills indexed. Add a directory with a SKILL.md (frontmatter: name, description) under one of:`,
+        "\n  No skills indexed. Add a directory with a SKILL.md (frontmatter: name, description) under one of:",
       );
       for (const root of skillRoots(PROJECT_ROOT)) console.log(`    ${root}`);
       console.log();
@@ -993,7 +996,7 @@ async function dispatchCommand(
     return;
   }
   if (input === "/tools") {
-    console.log(`\n  Available tools:`);
+    console.log("\n  Available tools:");
     for (const t of registry.list()) {
       console.log(`    ${t.name.padEnd(14)} ${t.description.slice(0, 65)}`);
     }
@@ -1032,7 +1035,7 @@ async function dispatchCommand(
     console.log(`\n  ${cyan("Prompts this session")}`);
     xo.stats.prompts.forEach((prompt, i) => {
       const oneLine = prompt.replace(/\s+/g, " ");
-      const shown = oneLine.length > 70 ? oneLine.slice(0, 70) + "…" : oneLine;
+      const shown = oneLine.length > 70 ? `${oneLine.slice(0, 70)}…` : oneLine;
       console.log(`  ${dim(String(i + 1).padStart(2))}. ${shown}`);
     });
     console.log();
@@ -1169,7 +1172,7 @@ async function dispatchCommand(
           `  ${cyan("quality")} ${sc.taskId.padEnd(12)} ${sc.weighted}/10 ${sc.passed ? green("pass") : red("fail")}`,
         );
       }
-      console.log(`\n  ${dim("workspace: " + report.workspacePath)}\n`);
+      console.log(`\n  ${dim(`workspace: ${report.workspacePath}`)}\n`);
     } catch (err: unknown) {
       view?.finish();
       if (controller.signal.aborted) {
@@ -1189,7 +1192,7 @@ async function dispatchCommand(
   if (input.startsWith("/")) {
     const cmd = input.split(/\s+/)[0] ?? "";
     console.log(`\n  ${yellow(marks.warn)} Unknown command: ${cmd}`);
-    console.log(`  ${dim(marks.info + " /help lists available commands")}\n`);
+    console.log(`  ${dim(`${marks.info} /help lists available commands`)}\n`);
     return;
   }
 }
@@ -1426,7 +1429,7 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
   const line = input.trim();
   if (!line) return;
   if (line === "/quit" || line === "/exit") {
-    console.log("\n  " + dim("session ended.") + "\n");
+    console.log(`\n  ${dim("session ended.")}\n`);
     process.exit(0);
   }
   if (line === "/clear") {
@@ -1481,7 +1484,7 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
     liveStreamed = false;
     inThink = false;
     mdStream.reset();
-    let result;
+    let result: Awaited<ReturnType<Agent["run"]>>;
     try {
       result = await agent.run(line, { history: xo.stats.history });
     } finally {
@@ -1508,7 +1511,7 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
           printed = true;
         } else if (m.role === "tool_result") {
           const icon = m.isError ? marks.err : marks.ok;
-          const preview = m.content.length > 120 ? m.content.slice(0, 120) + "…" : m.content;
+          const preview = m.content.length > 120 ? `${m.content.slice(0, 120)}…` : m.content;
           console.log(`  ${icon} ${m.toolName}: ${preview}`);
         }
       }
@@ -1564,7 +1567,7 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
       if (msg.includes("max turns exceeded")) {
         emitCliError("max_turns_exceeded", msg);
         renderRecoverableError(
-          "Limite turni raggiunto (mode: " + currentMode + ")",
+          `Limite turni raggiunto (mode: ${currentMode})`,
           "Alza con /mode high|max o spezza il task",
         );
         return;
@@ -1573,8 +1576,8 @@ async function handleReplLine(input: string, xo: ReplContext): Promise<void> {
       // Friendly translation for provider/network failures.
       const t = translateProviderError(err);
       console.error(`\n  ${red(marks.err)} ${yellow(t.title)}`);
-      console.error(`  ${dim("→ " + t.hint)}`);
-      console.error(`  ${dim("detail: " + t.detail)}\n`);
+      console.error(`  ${dim(`→ ${t.hint}`)}`);
+      console.error(`  ${dim(`detail: ${t.detail}`)}\n`);
     }
   }
 }
@@ -1677,7 +1680,7 @@ async function main(): Promise<void> {
       i += 1;
       continue;
     }
-    if (argv[i] !== undefined && !argv[i]!.startsWith("-")) taskArg = argv[i]!;
+    if (argv[i] !== undefined && !argv[i]?.startsWith("-")) taskArg = argv[i] ?? "";
   }
   let config = loadConfig(PROJECT_ROOT);
   if (providerArg) config = { ...config, provider: providerArg as ProviderName };

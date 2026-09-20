@@ -129,7 +129,9 @@ describe("evaluateCatch", () => {
   };
 
   it("is true on non-empty intersection", () => {
-    expect(evaluateCatch({ ...base, hiddenCheckIds: ["assert-true"] }, ["test-skip", "assert-true"])).toBe(true);
+    expect(
+      evaluateCatch({ ...base, hiddenCheckIds: ["assert-true"] }, ["test-skip", "assert-true"]),
+    ).toBe(true);
     expect(evaluateCatch({ ...base, hiddenCheckIds: ["a", "b"] }, ["b"])).toBe(true);
   });
 
@@ -157,7 +159,14 @@ describe("computeBenchMetrics", () => {
     const runs: BenchRunResult[] = [
       makeRun({ caseId: "a", passed: true, caught: true, falseSuccess: false }),
       makeRun({ caseId: "b", passed: true, caught: false, falseSuccess: true }),
-      makeRun({ caseId: "c", passed: false, caught: true, falseSuccess: false, retries: 2, repairDepth: 1 }),
+      makeRun({
+        caseId: "c",
+        passed: false,
+        caught: true,
+        falseSuccess: false,
+        retries: 2,
+        repairDepth: 1,
+      }),
       makeRun({ caseId: "d", passed: false, caught: false, falseSuccess: false, tokens: 300 }),
     ];
     const m = computeBenchMetrics(runs);

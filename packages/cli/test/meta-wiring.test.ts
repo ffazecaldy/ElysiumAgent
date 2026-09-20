@@ -5,10 +5,10 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HarnessEvent } from "@elysium/core";
 import { HypothesisEngine, TelemetryStore } from "@elysium/meta-layer";
 import type { OrchestrationConfig } from "@elysium/meta-layer";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runControlledIteration, wireMetaLoop } from "../src/meta-wiring";
 
 function makeTempRoot(): string {
@@ -89,10 +89,7 @@ describe("runControlledIteration", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  function makeWiring(
-    runner: ReturnType<typeof makeQueueRunner>,
-    applied: OrchestrationConfig[],
-  ) {
+  function makeWiring(runner: ReturnType<typeof makeQueueRunner>, applied: OrchestrationConfig[]) {
     return wireMetaLoop({
       benchmarkRunner: runner,
       store: new TelemetryStore({ filePath: path.join(root, "telemetry.jsonl") }),

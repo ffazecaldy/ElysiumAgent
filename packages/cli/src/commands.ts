@@ -29,7 +29,7 @@ import type {
   ToolCallPart,
   ToolResultMessage,
 } from "@elysium/core";
-import { loadConfig, describeConfig } from "./config";
+import { describeConfig, loadConfig } from "./config";
 import type { ProviderConfig } from "./config";
 
 const SYSTEM_PROMPT =

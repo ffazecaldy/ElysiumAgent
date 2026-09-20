@@ -35,21 +35,21 @@ describe("redactText — builtin patterns", () => {
   });
 
   it("redacts GitHub tokens (ghp_/gho_/github_pat_)", () => {
-    expect(redactText("ghp_" + "x".repeat(30))).toBe("***REDACTED:github_token***");
-    expect(redactText("gho_" + "x".repeat(30))).toBe("***REDACTED:github_token***");
-    expect(redactText("github_pat_" + "x".repeat(20))).toBe("***REDACTED:github_token***");
+    expect(redactText(`ghp_${"x".repeat(30)}`)).toBe("***REDACTED:github_token***");
+    expect(redactText(`gho_${"x".repeat(30)}`)).toBe("***REDACTED:github_token***");
+    expect(redactText(`github_pat_${"x".repeat(20)}`)).toBe("***REDACTED:github_token***");
   });
 
   it("redacts AWS access key ids (AKIA...)", () => {
-    expect(redactText("AKIA" + "2".repeat(16))).toBe("***REDACTED:aws_access_key_id***");
+    expect(redactText(`AKIA${"2".repeat(16)}`)).toBe("***REDACTED:aws_access_key_id***");
   });
 
   it("redacts Slack tokens (xox...)", () => {
-    expect(redactText("xoxb-" + "a".repeat(20))).toBe("***REDACTED:slack_token***");
+    expect(redactText(`xoxb-${"a".repeat(20)}`)).toBe("***REDACTED:slack_token***");
   });
 
   it("redacts JWTs (eyJ... three base64 segments)", () => {
-    const jwt = "eyJ" + "a".repeat(20) + ".eyJ" + "b".repeat(20) + "." + "c".repeat(20);
+    const jwt = `eyJ${"a".repeat(20)}.eyJ${"b".repeat(20)}.${"c".repeat(20)}`;
     expect(redactText(`header ${jwt} trailer`)).toBe("header ***REDACTED:jwt*** trailer");
   });
 
@@ -111,11 +111,11 @@ describe("redactText — extraValues", () => {
 
 describe("redactObject", () => {
   it("deep-walks nested objects and arrays, returning a copy", () => {
-    const input = { a: { b: ["sk-" + "x".repeat(20)] } };
+    const input = { a: { b: [`sk-${"x".repeat(20)}`] } };
     const output = redactObject(input);
     expect(output).toEqual({ a: { b: ["***REDACTED:openai_api_key***"] } });
     expect(output).not.toBe(input);
-    expect(input.a.b[0]).toBe("sk-" + "x".repeat(20)); // input untouched
+    expect(input.a.b[0]).toBe(`sk-${"x".repeat(20)}`); // input untouched
   });
 
   it("passes extraValues through to every string leaf", () => {
@@ -135,7 +135,7 @@ describe("redactObject", () => {
 describe("containsSecret", () => {
   it("returns true for builtin matches", () => {
     expect(containsSecret("token sk-abc123 here")).toBe(true);
-    expect(containsSecret("AKIA" + "2".repeat(16))).toBe(true);
+    expect(containsSecret(`AKIA${"2".repeat(16)}`)).toBe(true);
   });
 
   it("returns true for exact extraValues matches", () => {
@@ -168,11 +168,11 @@ describe("false-positive resistance", () => {
 describe("idempotency", () => {
   it("redacting twice yields the same result as once", () => {
     const samples = [
-      "sk-" + "x".repeat(20),
+      `sk-${"x".repeat(20)}`,
       "Bearer abc",
       "password=hunter2hunter2",
       "value hunter2hunter2 end",
-      "eyJ" + "a".repeat(20) + ".eyJ" + "b".repeat(20) + "." + "c".repeat(20),
+      `eyJ${"a".repeat(20)}.eyJ${"b".repeat(20)}.${"c".repeat(20)}`,
     ];
     for (const text of samples) {
       const once = redactText(text, ["hunter2hunter2"]);
@@ -182,7 +182,7 @@ describe("idempotency", () => {
   });
 
   it("idempotency holds for redactObject too", () => {
-    const input = { a: { b: ["sk-" + "x".repeat(20)], pw: "password=hunter2hunter2" } };
+    const input = { a: { b: [`sk-${"x".repeat(20)}`], pw: "password=hunter2hunter2" } };
     const once = redactObject(input, ["hunter2hunter2"]);
     const twice = redactObject(once, ["hunter2hunter2"]);
     expect(twice).toEqual(once);

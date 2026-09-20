@@ -1,8 +1,3 @@
-/**
- * Regression tests for Parte A — recoverable CLI errors + transactional provider switch.
- * Tests the core error classes and the provider-switch logic without a real REPL.
- */
-import { describe, expect, it } from "vitest";
 import {
   FatalError,
   MissingApiKeyError,
@@ -11,6 +6,11 @@ import {
   RecoverableCliError,
   UnknownProviderError,
 } from "@elysium/core";
+/**
+ * Regression tests for Parte A — recoverable CLI errors + transactional provider switch.
+ * Tests the core error classes and the provider-switch logic without a real REPL.
+ */
+import { describe, expect, it } from "vitest";
 
 describe("typed recoverable errors", () => {
   it("MissingApiKeyError is a ProviderConfigurationError and a RecoverableCliError", () => {

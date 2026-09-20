@@ -53,10 +53,10 @@ import {
 import { redactObject, redactText } from "@elysium/core";
 import { collectEnvSecretValues, gateBashCommand } from "./bash-gate";
 import type { BashCommandPolicy } from "./policy/bash-policy";
-import { type TaskPathPolicy, checkPath } from "./task-ownership";
-import { finishRun, recordRunPhase as markRunPhase, startRunRecord } from "./swarm-run-store";
 import { markInterrupted } from "./run-state";
 import { createSwarmGit } from "./swarm-git";
+import { finishRun, recordRunPhase as markRunPhase, startRunRecord } from "./swarm-run-store";
+import { type TaskPathPolicy, checkPath } from "./task-ownership";
 
 // ── Public seam ───────────────────────────────────────────────────
 

@@ -264,7 +264,7 @@ describe("MetaLayer closed loop", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ml-"));
     const store = new TelemetryStore({ filePath: path.join(dir, "t.jsonl") });
     const hypStore = new HypothesisStore({ filePath: path.join(dir, "h.jsonl") });
-    let config = { repairRounds: 1, maxConcurrency: 4 };
+    const config = { repairRounds: 1, maxConcurrency: 4 };
     const mk = (): { meta: MetaLayer; engine: HypothesisEngine } => {
       const engine = new HypothesisEngine({ minWindow: 5 });
       const meta = new MetaLayer({

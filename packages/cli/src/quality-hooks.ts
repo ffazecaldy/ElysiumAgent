@@ -4,7 +4,7 @@
  */
 // Direct module import (not the package root): the root index does not
 // re-export the quality modules yet, and this file owns that wiring.
-import { auditTestFiles, type AuditFinding } from "../../core/src/quality/evidence-audit";
+import { type AuditFinding, auditTestFiles } from "../../core/src/quality/evidence-audit";
 
 /**
  * Heuristic: does this artifact path look like a test file?

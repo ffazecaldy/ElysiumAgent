@@ -72,9 +72,9 @@ describe("GitService", () => {
     writeFileSync(join(dir, "notes.txt"), "line1\nCHANGED\nline2\nnew line\n", "utf8");
     const stat = svc.diffStat("elysium/task-start");
     expect(stat).not.toBeNull();
-    expect(stat!.files).toBeGreaterThanOrEqual(1);
-    expect(stat!.insertions).toBeGreaterThan(0);
-    expect(stat!.deletions).toBeGreaterThanOrEqual(0);
+    expect(stat?.files).toBeGreaterThanOrEqual(1);
+    expect(stat?.insertions).toBeGreaterThan(0);
+    expect(stat?.deletions).toBeGreaterThanOrEqual(0);
 
     // diff fromTag vs a committed HEAD must match the working-tree diff
     expect(svc.commit("modify notes")).toBeTruthy();

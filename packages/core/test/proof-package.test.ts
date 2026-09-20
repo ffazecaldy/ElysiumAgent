@@ -4,9 +4,9 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  type ProofPackageInput,
   assembleProofPackage,
   renderProofPackage,
-  type ProofPackageInput,
 } from "../src/verification/proof-package";
 
 const okInput = (): ProofPackageInput => ({

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 /**
  * Regression tests for Parte A — REPl command dispatch returns control to the
  * prompt instead of terminating the process on recoverable errors.
@@ -11,7 +12,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 
 function projectRoot(): string {
@@ -30,7 +30,7 @@ function runReplSession(
   timeoutMs = 30000,
 ): { out: string; exitCode: number | null } {
   const root = projectRoot();
-  const input = lines.join("\n") + "\n";
+  const input = `${lines.join("\n")}\n`;
   try {
     const stdout = execFileSync("pnpm", ["agent", "--provider", "mock"], {
       input,

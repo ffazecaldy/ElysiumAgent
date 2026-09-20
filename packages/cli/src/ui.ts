@@ -203,7 +203,10 @@ export const icons = {
   gear: marks.run,
 } as const;
 
-const ANSI_PATTERN = /\u001B\[[0-9;]*[A-Za-z]/g;
+// ESC built at runtime: a literal control char in the regex trips
+// noControlCharactersInRegex; String.fromCharCode keeps the pattern exact.
+const ESC = String.fromCharCode(27);
+const ANSI_PATTERN = new RegExp(`${ESC}\\[[0-9;]*[A-Za-z]`, "g");
 
 /** Remove all ANSI SGR sequences from a rendered string. */
 export function stripAnsi(s: string): string {
@@ -698,7 +701,7 @@ export function thinkingSpinner(): Spinner {
     const secs = Math.floor((Date.now() - startedAt) / 1000);
     const t = secs > 0 ? ` ${secs}s` : "";
     process.stdout.write(
-      `\r\u001B[K  ${cyan(ORBIT[index] ?? "")} ${dim("thinking" + t + " — Esc to cancel")}`,
+      `\r\u001B[K  ${cyan(ORBIT[index] ?? "")} ${dim(`thinking${t} — Esc to cancel`)}`,
     );
   };
 
