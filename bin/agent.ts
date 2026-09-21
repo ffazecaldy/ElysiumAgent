@@ -50,6 +50,7 @@ import {
   makeEvent,
 } from "@elysium/core";
 import { EventBus as RealEventBus } from "@elysium/core";
+import { createAdaptiveEngine } from "../packages/cli/src/adaptive";
 import { collectEnvSecretValues, gateBashCommand } from "../packages/cli/src/bash-gate";
 import {
   PROVIDER_MODELS,
@@ -914,15 +915,19 @@ async function dispatchCommand(
     // history stored under PROJECT_ROOT. OBSERVE-ONLY — display only.
     try {
       const learning = createLearningEngine(PROJECT_ROOT);
+      const adaptive = createAdaptiveEngine({ root: PROJECT_ROOT });
       const profile = learning.profile();
       const pct = (v: number): string => `${(v * 100).toFixed(1)}%`;
       console.log(section("elysium learning profile"));
+      // ── EXPERIENCE (FACTS) ──
+      console.log(`  ${bold("Experience")}`);
       console.log(
         `  Samples: ${String(profile.sampleCount)}${profile.dataSufficient ? "" : dim(" (insufficienti — soglia 5)")}`,
       );
-      console.log(`  Ingested totali: ${String(profile.totalRunsIngested)}`);
+      console.log(`  Total ingested: ${String(profile.totalRunsIngested)}`);
       console.log("");
-      const m = profile.metrics;
+      // ── PERFORMANCE (DERIVED METRICS) ──
+      console.log(`  ${bold("Performance")}`);
       console.log(`  Verified success     ${pct(m.verifiedSuccessRate)}`);
       console.log(`  False success        ${pct(m.falseSuccessRate)}`);
       console.log(`  False failure        ${pct(m.falseFailureRate)}`);
@@ -932,15 +937,30 @@ async function dispatchCommand(
       );
       console.log(`  Retry rate           ${pct(m.retryRate)}`);
       if (profile.taskPatterns.length > 0) {
-        console.log(`\n  ${bold("Patterns")}`);
+        console.log(`\n  ${bold("Patterns")} ${dim("(inferenze storiche)")}`);
         for (const p of profile.taskPatterns) console.log(`  ${dim("•")} ${p.summary}`);
       }
       if (profile.failurePatterns.length > 0) {
-        console.log(`\n  ${bold("Failure patterns")}`);
+        if (profile.taskPatterns.length === 0) {
+          console.log(`\n  ${bold("Patterns")} ${dim("(inferenze storiche)")}`);
+        }
         for (const p of profile.failurePatterns) console.log(`  ${dim("•")} ${p.summary}`);
       }
+      // ── STRATEGIES (adaptive, gated) ──
+      const strategyStore = adaptive.store();
+      console.log(`\n  ${bold("Strategies")} ${dim(`(mode: ${strategyStore.mode})`)}`);
+      if (strategyStore.strategies.length === 0) {
+        console.log(`  ${dim("nessuna — derivano solo da pattern oltre la reliability gate")}`);
+      } else {
+        for (const s of strategyStore.strategies) {
+          console.log(`  ${dim("•")} ${s.id}`);
+          console.log(
+            `    ${dim(`status: ${s.status} · samples: ${String(s.sampleCount)} · reliability: ${s.reliability.score.toFixed(2)} · action: ${s.action.kind}`)}`,
+          );
+        }
+      }
       console.log(
-        `\n  ${dim("memoria dell'esperienza · informativa solo · nessuna decisione automatica")}\n`,
+        `\n  ${dim("FACT = esperienza · INFERENCE = pattern · STRATEGY = adattivo gated · mai bypass security")}\n`,
       );
     } catch {
       console.log(`\n  ${marks.fail} Impossibile leggere il learning profile.\n`);
