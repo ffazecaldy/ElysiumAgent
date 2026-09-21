@@ -299,13 +299,23 @@ function isWithinAnyRoot(roots: string[], target: string): boolean {
   });
 }
 
-/** Base command of a token list: skips leading `VAR=...` assignments, resolves shell escapes. */
+/** Base command of a token list: skips leading `VAR=...` assignments, resolves
+ * shell escapes, and de-qualifies absolute/relative binary paths so
+ * `/bin/git push` and `./git push` match the `git` deny patterns (probe C3).
+ * On Windows `cwd`-relative bare commands are handled by the runtime env
+ * guard (NoDefaultCurrentDirectoryInExePath), not here. */
 function commandBase(tokens: string[]): string {
   for (const token of tokens) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
       continue;
     }
-    return shellResolve(token).toLowerCase();
+    const word = shellResolve(token);
+    const base = word.includes("/")
+      ? (word.split("/").pop() ?? word)
+      : word.includes("\\")
+        ? (word.split("\\").pop() ?? word)
+        : word;
+    return base.replace(/\.(exe|cmd|bat|com)$/i, "").toLowerCase();
   }
   return "";
 }
@@ -364,6 +374,100 @@ function recursiveRmReason(tokens: string[]): string | null {
   return recursive ? "destructive recursive 'rm' is denied" : null;
 }
 
+/**
+ * Words that pass the wrapped command through unchanged: POSIX utilities and
+ * shell builtins whose first non-flag argument is another command line.
+ * `sudo` is already denied outright; these wrappers otherwise made
+ * `command git push` / `env git push` / `exec git push` invisible to the
+ * deny list (probe C3).
+ */
+const COMMAND_WRAPPERS = new Set([
+  "command",
+  "env",
+  "exec",
+  "nice",
+  "nohup",
+  "stdbuf",
+  "timeout",
+  "time",
+  "watch",
+]);
+
+/**
+ * Canonical exec view of a token list: unwrap pass-through wrappers and git
+ * global flags so the deny list matches what actually executes.
+ * - `command git push`, `env git push`, `exec git push`, `nice -n 5 git
+ *   push`, `timeout 5 git push` → base becomes `git`;
+ * - `git -c k=v push`, `git --work-tree=/tmp push` → second word becomes
+ *   `push` (global flags consume the following value).
+ */
+function canonicalTokens(tokens: string[]): string[] {
+  let out = [...tokens];
+  // Unwrap pass-through wrappers.
+  for (;;) {
+    const base = commandBase(out);
+    if (!COMMAND_WRAPPERS.has(base)) break;
+    const start = out.findIndex((t) => shellResolve(unquote(t)).toLowerCase() === base);
+    if (start === -1) break;
+    let i = start + 1;
+    // Skip wrapper options and their values (e.g. `nice -n 5`, `env -i
+    // VAR=1`, `command -p`); `timeout` takes a POSITIONAL duration
+    // (`timeout 5 git push`) which must also be skipped (probe C3).
+    if (base === "timeout" && /^\d+$/.test(shellResolve(unquote(out[i] ?? "")))) {
+      i += 1;
+    }
+    while (i < out.length) {
+      const word = shellResolve(unquote(out[i] ?? "")).toLowerCase();
+      if (word.startsWith("-")) {
+        i += 1;
+        if (
+          word === "-n" ||
+          word === "-i" ||
+          word === "-u" ||
+          word === "-p" ||
+          base === "timeout"
+        ) {
+          i += 1;
+        }
+        continue;
+      }
+      if (word.includes("=")) {
+        i += 1;
+        continue;
+      }
+      break;
+    }
+    out = out.slice(i);
+  }
+  // Strip git global flags. Only VALUE-TAKING globals consume the next
+  // token — value-less ones (--no-pager, --bare, …) must not eat the
+  // subcommand (probe C3: `git --no-pager push` became just `git`).
+  if (commandBase(out) === "git") {
+    const start = out.findIndex((t) => shellResolve(unquote(t)).toLowerCase() === "git");
+    if (start !== -1) {
+      const GIT_VALUE_FLAGS = new Set([
+        "-c",
+        "--exec-path",
+        "--git-dir",
+        "--work-tree",
+        "--namespace",
+        "--super-prefix",
+        "--config-env",
+      ]);
+      let i = start + 1;
+      while (i < out.length && (out[i] ?? "").startsWith("-")) {
+        const flag = shellResolve(unquote(out[i] ?? "")).toLowerCase();
+        // `--flag=value` carries its value inline (1 token); a bare value-
+        // taking flag consumes the NEXT token (2 tokens).
+        const consumesNext = GIT_VALUE_FLAGS.has(flag.split("=")[0] ?? flag) && !flag.includes("=");
+        i += consumesNext ? 2 : 1;
+      }
+      out = [...out.slice(0, start + 1), ...out.slice(i)];
+    }
+  }
+  return out;
+}
+
 /** Deny reason for one segment, or `null` when the segment passes.
  * DOUBLE-INTERPRETER AWARENESS: on Windows exec() runs commands through
  * cmd.exe, where a backslash is a path separator, not an escape. Each token
@@ -376,24 +480,47 @@ function denyReasonForSegment(segmentTokens: string[], customDenied: string[]): 
   }
   const posix = segmentTokens.map((token) => shellResolve(token).toLowerCase());
   const cmdRaw = segmentTokens.map((token) => token.toLowerCase());
-  for (const lowered of [posix, cmdRaw]) {
-    for (const entry of customDenied) {
-      const pattern = patternTokens(entry);
-      if (pattern.length > 0 && matchesPattern(lowered, pattern)) {
-        return `denied command pattern: '${entry.trim()}'`;
+  // De-qualified view: the head binary with an absolute/relative path
+  // (`/bin/git push`, `./git push`, `C:\bin\git.exe push`) reduced to its
+  // base name — a deny list must match the binary that runs, not the spelling.
+  const dequalify = (tokens: string[]): string[] => {
+    const out = [...tokens];
+    for (let i = 0; i < out.length; i++) {
+      const token = out[i] ?? "";
+      if (/^[a-z_][a-z0-9_]*=/.test(token)) continue;
+      if (token.includes("/") || token.includes("\\")) {
+        const base = commandBase([token]);
+        if (base.length > 0) out[i] = base;
       }
+      break;
     }
-    for (const builtin of BUILTIN_DENY_PATTERNS) {
-      if (matchesPattern(lowered, builtin.tokens)) {
-        return builtin.reason;
+    return out;
+  };
+  const cmdRawDeq = dequalify(cmdRaw);
+  const posixDeq = dequalify(posix);
+  for (const lowered of [posix, cmdRaw, posixDeq, cmdRawDeq]) {
+    // Canonical exec view: wrappers unwrapped, git global flags stripped —
+    // the deny list matches what actually runs, not how it was spelled.
+    const canonical = canonicalTokens(lowered);
+    for (const view of [canonical, lowered]) {
+      for (const entry of customDenied) {
+        const pattern = patternTokens(entry);
+        if (pattern.length > 0 && matchesPattern(view, pattern)) {
+          return `denied command pattern: '${entry.trim()}'`;
+        }
       }
-    }
-    const rmReason = recursiveRmReason(lowered);
-    if (rmReason !== null) {
-      return rmReason;
-    }
-    if (segmentTokens.length === 1 && SHELL_INTERPRETERS.has(lowered[0] ?? "")) {
-      return "piping into a shell interpreter is denied";
+      for (const builtin of BUILTIN_DENY_PATTERNS) {
+        if (matchesPattern(view, builtin.tokens)) {
+          return builtin.reason;
+        }
+      }
+      const rmReason = recursiveRmReason(view);
+      if (rmReason !== null) {
+        return rmReason;
+      }
+      if (segmentTokens.length === 1 && SHELL_INTERPRETERS.has(view[0] ?? "")) {
+        return "piping into a shell interpreter is denied";
+      }
     }
   }
   return null;
@@ -506,6 +633,11 @@ function extractEmbeddedCommands(segment: string): string[] {
   for (let i = 1; i < bt.length; i += 2) {
     found.push(bt[i] ?? "");
   }
+  // Process substitution bodies: `<(…)` and `>(…)` are full command lines.
+  const ps = segment.match(/[<>]\(([\s\S]*?)\)/g) ?? [];
+  for (const m of ps) {
+    found.push(m.slice(2, -1));
+  }
   // Inline-code arguments of interpreters. `cmd /c …` re-parses its whole
   // tail as a command line, so everything after the flag is embedded.
   const tokens = tokenizeSegment(segment);
@@ -550,6 +682,36 @@ function indirectionFormReason(segment: string): string | null {
   }
   if (segment.includes("`")) {
     return "command substitution backticks require approval (embedded code is re-checked statically)";
+  }
+  // Parameter/expansion forms the tokenizer cannot see through ($IFS word
+  // splitting, ${…} substitution, brace expansion). Only refuse them when
+  // they sit on a deny-relevant head word — benign usages keep working.
+  const headTokens = tokenizeSegment(segment);
+  const rawBase = (() => {
+    for (const token of headTokens) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) continue;
+      return token.toLowerCase();
+    }
+    return "";
+  })();
+  const denyRelevant =
+    /\b(git|rm|mv|cp|tee|bash|sh|zsh|dash|eval|source|powershell|pwsh|cmd|curl|wget|nc|ssh|ftp|telnet|python|python3|node|perl|ruby|php|sudo|command|env|exec)\b/.test(
+      rawBase.replace(/\$\{?/g, " "),
+    ) ||
+    /^(git|rm|mv|cp|tee|bash|sh|zsh|dash|eval|source|powershell|pwsh|cmd|curl|wget|nc|ssh|ftp|telnet|python|python3|node|perl|ruby|php|sudo|command|env|exec)(\$\{?[A-Za-z0-9_]*\?)?/.test(
+      rawBase,
+    );
+  if (denyRelevant && /\$\{?[A-Za-z_]/.test(segment)) {
+    return "variable expansion on a restricted command requires approval (e.g. ${IFS} word-splitting)";
+  }
+  if (denyRelevant && /\{.*,.*\}/.test(segment)) {
+    return "brace expansion on a restricted command requires approval";
+  }
+  // Process substitution `<(…)` / `>(…)`: the inside is a full command line.
+  // The embedded command is extracted by extractEmbeddedCommands and
+  // re-checked by the caller; here only the opaque FORM is flagged.
+  if (/[<>]\(/.test(segment)) {
+    return "process substitution requires approval (embedded command is re-checked statically)";
   }
   const tokens = tokenizeSegment(segment).map((token) => shellResolve(token).toLowerCase());
   const base = commandBase(tokens);

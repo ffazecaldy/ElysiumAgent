@@ -129,6 +129,62 @@ describe("probe regressions: destructive shell forms (B4)", () => {
   });
 });
 
+describe("probe campaign 2 regressions: wrappers, git globals, expansion", () => {
+  it("denies deny-listed commands behind pass-through wrappers", () => {
+    for (const cmd of [
+      "command git push",
+      "env git push",
+      "exec git push",
+      "nice git push",
+      "timeout 5 git push",
+      "nohup git push",
+    ]) {
+      expect(checkBashCommand(openPolicy, cmd).verdict).toBe("DENY");
+    }
+  });
+
+  it("strips git global flags (value and value-less) before matching", () => {
+    for (const cmd of ["git -c x=y push", "git --work-tree=/tmp push", "git --no-pager push"]) {
+      expect(checkBashCommand(openPolicy, cmd).verdict).toBe("DENY");
+    }
+  });
+
+  it("denies deny-listed commands via absolute/relative binary paths", () => {
+    for (const cmd of [
+      "/bin/git push",
+      "./git push",
+      "/usr/bin/rm -rf /repo",
+      "C:/bin/git.exe push",
+    ]) {
+      expect(checkBashCommand(openPolicy, cmd).verdict).toBe("DENY");
+    }
+  });
+
+  it("requires approval for variable/brace expansion on restricted heads", () => {
+    for (const cmd of ["git${IFS}push", "git$IFS push", "git push {origin,mirror}"]) {
+      expect(checkBashCommand(openPolicy, cmd).verdict).toBe("REQUIRE_APPROVAL");
+    }
+    // Benign expansion elsewhere stays allowed.
+    expect(checkBashCommand(openPolicy, "echo ${HOME}").verdict).toBe("ALLOW");
+    expect(checkBashCommand(openPolicy, "echo a{b,c}").verdict).toBe("ALLOW");
+  });
+
+  it("blocks process substitution and re-checks the embedded command", () => {
+    const denied = checkBashCommand(openPolicy, "diff <(git push) /dev/null");
+    expect(denied.verdict).toBe("DENY");
+    expect(denied.reason).toContain("embedded command denied");
+    const benign = checkBashCommand(openPolicy, "diff <(sort a.txt) b.txt");
+    expect(benign.verdict).toBe("REQUIRE_APPROVAL");
+  });
+
+  it("still allows benign wrappers and value-less git flags", () => {
+    expect(checkBashCommand(openPolicy, "command git status").verdict).toBe("ALLOW");
+    expect(checkBashCommand(openPolicy, "env CI=1 npm test").verdict).toBe("ALLOW");
+    expect(checkBashCommand(openPolicy, "git --no-pager status").verdict).toBe("ALLOW");
+    expect(checkBashCommand(openPolicy, "timeout 30 npm test").verdict).toBe("ALLOW");
+  });
+});
+
 describe("probe regressions: tee as a write primitive (B5)", () => {
   it("denies tee writing outside the writable roots", () => {
     const r = checkBashCommand(openPolicy, "echo x | tee /etc/hosts");

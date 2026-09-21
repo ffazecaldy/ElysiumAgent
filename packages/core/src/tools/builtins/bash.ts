@@ -35,6 +35,14 @@ interface ProcessOutcome {
 
 function runCommand(command: string, cwd: string, signal: AbortSignal): Promise<ProcessOutcome> {
   return new Promise((resolve) => {
+    // Executable hijack guard (probe C2): cmd.exe resolves BARE command names
+    // from the CURRENT DIRECTORY before PATH, so a workspace-shipped
+    // `git.cmd`/`npm.bat` shadows the real tool. Setting this env var makes
+    // Windows skip the cwd in executable resolution for this child only.
+    const childEnv: NodeJS.ProcessEnv =
+      process.platform === "win32"
+        ? { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" }
+        : { ...process.env };
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -44,7 +52,7 @@ function runCommand(command: string, cwd: string, signal: AbortSignal): Promise<
     let killWatchdog: NodeJS.Timeout | undefined;
     const child = exec(
       command,
-      { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
+      { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: childEnv },
       (error, stdout, stderr) => {
         clearTimeout(timer);
         if (killWatchdog !== undefined) clearTimeout(killWatchdog);
