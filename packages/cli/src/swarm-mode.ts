@@ -51,6 +51,7 @@ import {
   structuralJudge,
 } from "@elysium/core";
 import { redactObject, redactText } from "@elysium/core";
+import { createAdaptiveEngine } from "./adaptive";
 import { collectEnvSecretValues, gateBashCommand } from "./bash-gate";
 import type { DecisionMode } from "./decision/policy";
 import type { DecisionProvider } from "./decision/provider";
@@ -557,6 +558,11 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
   // E6: per-run git checkpoints (opt-in). All functions no-op when disabled
   // or when git is unavailable — never blocks the run.
   const swarmGit = createSwarmGit(workspace, { enabled: opts.gitCheckpoints === true });
+  // Adaptive Strategy Layer (default disabled): applicable strategies add
+  // extra VERIFICATION to future runs. Null unless runsRoot is set — the
+  // strategy store lives next to the learning memory under the run root.
+  const adaptiveEngine =
+    opts.runsRoot !== undefined ? createAdaptiveEngine({ root: opts.runsRoot as string }) : null;
   // Native Evaluation Layer (OBSERVE-ONLY): accumulates evidence facts from
   // critic verdicts, git states and tool outcomes; emits EvaluationRecords on
   // the swarm event trail. Never blocks, never mutates run behavior — the
@@ -1026,6 +1032,51 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
             source: "git",
             facts: { ...swarmGit.snapshot(), taskId: event.taskId },
           });
+          // Adaptive Strategy Layer (apply mode): an applicable strategy adds
+          // a REAL extra verification here — observed through the same
+          // evaluation pipeline. Verification only: nothing is bypassed.
+          const applicable = adaptiveEngine?.applicableStrategies() ?? [];
+          for (const strategy of applicable) {
+            if (strategy.action.kind === "ADD_POSTCONDITION_VERIFICATION") {
+              const snapshot = swarmGit.snapshot();
+              const extra = buildRollbackPostcondition(
+                { head: snapshot.head, untracked: [], modified: [] },
+                { head: snapshot.head, untracked: snapshot.untracked, modified: snapshot.modified },
+              );
+              evaluationRuntime?.observe({
+                kind: "postcondition_check",
+                source: "report",
+                facts: {
+                  name: `adaptive:${strategy.id}:${extra.name}`,
+                  ok: extra.ok,
+                  expected: extra.expected,
+                  observed: extra.observed,
+                  byStrategy: strategy.id,
+                },
+              });
+              emitSwarm({
+                type: "custom",
+                data: {
+                  kind: "strategy_applied",
+                  strategyId: strategy.id,
+                  taskId: event.taskId,
+                  action: strategy.action.kind,
+                  postconditionOk: extra.ok,
+                },
+              } as never);
+            } else {
+              emitSwarm({
+                type: "custom",
+                data: {
+                  kind: "strategy_suggested",
+                  strategyId: strategy.id,
+                  taskId: event.taskId,
+                  action: strategy.action.kind,
+                  note: strategy.action.note ?? "",
+                },
+              } as never);
+            }
+          }
         } catch {
           // observation failure never affects the run (OBSERVE-ONLY contract)
         }

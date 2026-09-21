@@ -10,6 +10,7 @@
  */
 
 export { buildProfile, computeMetrics, taskClassOf } from "./engine";
+export { revalidateStrategy, type RevalidationVerdict } from "./runtime";
 export { appendRun, emptyStore, loadStore, saveStore } from "./store";
 export {
   createLearningEngine,

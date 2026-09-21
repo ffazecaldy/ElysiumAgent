@@ -64,11 +64,25 @@ export function toRunRecord(
  */
 export interface LearningEngine {
   /** Ingest one evaluated run into the persistent memory. */
-  recordLearning(record: EvaluationRecord, opts?: { goal?: string; retryCount?: number }): void;
+  recordLearning(
+    record: EvaluationRecord,
+    opts?: { goal?: string; retryCount?: number; agentClaim?: string },
+  ): void;
   /** Load the raw store (facts only). */
   loadStore(): LearningStoreShape;
   /** Fold the whole history into an aggregate profile (deterministic). */
   profile(): AgentPerformanceProfile;
+}
+
+/** Re-validation verdict for one strategy against post-strategy history. */
+export interface RevalidationVerdict {
+  strategyId: string;
+  /** New observed failure rate within the strategy's scope. */
+  failureRate: number;
+  sampleCount: number;
+  /** still-reliable | degraded (below policy, watch) | invalidated (contradicted). */
+  verdict: "still-reliable" | "degraded" | "invalidated";
+  reason: string;
 }
 
 export function createLearningEngine(storageRoot: string): LearningEngine {
@@ -82,7 +96,10 @@ export function createLearningEngine(storageRoot: string): LearningEngine {
   })();
 
   return {
-    recordLearning(record: EvaluationRecord, opts?: { goal?: string; retryCount?: number }): void {
+    recordLearning(
+      record: EvaluationRecord,
+      opts?: { goal?: string; retryCount?: number; agentClaim?: string },
+    ): void {
       try {
         const store = loadStore(dir);
         const run = toRunRecord(record, opts);
@@ -101,5 +118,69 @@ export function createLearningEngine(storageRoot: string): LearningEngine {
         return buildProfile({ version: 1, runs: [], taskClassCounts: {} });
       }
     },
+  };
+}
+
+/**
+ * POST-STRATEGY REVALIDATION (closes the feedback loop): after a strategy has
+ * been applied, the runs made SINCE the strategy was approved are re-checked
+ * against the strategy's claim. Runs are filtered by `since` timestamp and —
+ * when provided — task class. Verdicts:
+ * - still-reliable: failure rate in scope is at or below the policy maximum;
+ * - degraded:       above the maximum (watch — refresh() will stale it);
+ * - invalidated:    claimed failure pattern vanished (no matching failures).
+ * Pure over the store; the caller decides what to do with the verdict.
+ */
+export function revalidateStrategy(
+  store: LearningStoreShape,
+  input: {
+    strategyId: string;
+    pattern: string;
+    since: string;
+    taskClass?: string;
+    policy: { maximumConflictRate: number; minimumSamples: number };
+  },
+): RevalidationVerdict {
+  const sinceMs = Date.parse(input.since);
+  const inScope = store.runs.filter((r) => {
+    const atMs = Date.parse(r.at);
+    if (!Number.isFinite(sinceMs) || !Number.isFinite(atMs) || atMs < sinceMs) return false;
+    if (input.taskClass !== undefined && r.taskClass !== input.taskClass) return false;
+    return true;
+  });
+  const failing = inScope.filter(
+    (r) => r.outcome === "FAIL" || r.outcome === "FALSE_SUCCESS" || r.score < 1,
+  );
+  const failureRate = inScope.length > 0 ? failing.length / inScope.length : 0;
+  const base = {
+    strategyId: input.strategyId,
+    failureRate,
+    sampleCount: inScope.length,
+  };
+  if (inScope.length < input.policy.minimumSamples) {
+    return {
+      ...base,
+      verdict: "still-reliable",
+      reason: `insufficient post-strategy samples (${inScope.length} < ${input.policy.minimumSamples}) — no re-judgement yet`,
+    };
+  }
+  if (failing.length === 0) {
+    return {
+      ...base,
+      verdict: "invalidated",
+      reason: `pattern vanished: ${inScope.length} post-strategy runs, zero matching failures — the strategy's premise no longer holds`,
+    };
+  }
+  if (failureRate > input.policy.maximumConflictRate) {
+    return {
+      ...base,
+      verdict: "degraded",
+      reason: `post-strategy failure rate ${failureRate.toFixed(2)} exceeds maximum ${input.policy.maximumConflictRate} — strategy is not paying off`,
+    };
+  }
+  return {
+    ...base,
+    verdict: "still-reliable",
+    reason: `post-strategy failure rate ${failureRate.toFixed(2)} within policy`,
   };
 }
