@@ -32,6 +32,9 @@ const run = (overrides: Partial<RunRecord> & { runId: string }): RunRecord => ({
   tools: [],
   failedPostconditions: [],
   evidenceCount: 2,
+  verifiedPostconditions: 2,
+  totalPostconditions: 2,
+  agentClaim: "success",
   ...overrides,
 });
 
@@ -181,8 +184,24 @@ describe("aggregation engine", () => {
     const m = computeMetrics([
       run({ runId: "1", outcome: "PASS", confidence: 0.9, score: 1 }),
       run({ runId: "2", outcome: "PASS", confidence: 0.7, score: 1 }),
-      run({ runId: "3", outcome: "FALSE_SUCCESS", confidence: 0.4, score: 0 }),
-      run({ runId: "4", outcome: "FAIL", score: 0.2, retryCount: 1 }),
+      run({
+        runId: "3",
+        outcome: "FALSE_SUCCESS",
+        confidence: 0.4,
+        score: 0,
+        verifiedPostconditions: 0,
+        totalPostconditions: 1,
+        agentClaim: "rollback success",
+      }),
+      run({
+        runId: "4",
+        outcome: "FAIL",
+        score: 0.2,
+        retryCount: 1,
+        agentClaim: "task fallito",
+        verifiedPostconditions: 0,
+        totalPostconditions: 2,
+      }),
     ]);
     expect(m.verifiedSuccessRate).toBe(0.5);
     expect(m.falseSuccessRate).toBe(0.25);
@@ -193,19 +212,74 @@ describe("aggregation engine", () => {
     expect(m.retryRate).toBe(0.25);
   });
 
-  it("false-failure proxy: FAIL with score >= 0.5 counts as informative false-failure", () => {
+  it("claim-vs-outcome: real false-failure = claimed failure but ALL postconditions passed", () => {
     const m = computeMetrics([
-      run({ runId: "1", outcome: "FAIL", score: 0.75 }),
-      run({ runId: "2", outcome: "FAIL", score: 0.1 }),
+      // claimed failure, everything verified good → FALSE FAILURE
+      run({
+        runId: "ff1",
+        outcome: "FAIL",
+        score: 1,
+        agentClaim: "task fallito",
+        verifiedPostconditions: 2,
+        totalPostconditions: 2,
+      }),
+      // claimed failure but only half verified → unclassified (no threshold)
+      run({
+        runId: "ff2",
+        outcome: "FAIL",
+        score: 0.5,
+        agentClaim: "task fallito",
+        verifiedPostconditions: 1,
+        totalPostconditions: 2,
+      }),
     ]);
     expect(m.falseFailureRate).toBe(0.5);
+    expect(m.falseSuccessRate).toBe(0);
   });
 
-  it("taskClassOf: leading word, lowercase, non-word stripped, fallback unknown", () => {
-    expect(taskClassOf("Create the thing")).toBe("create");
-    expect(taskClassOf("  FIX   bug")).toBe("fix");
-    expect(taskClassOf("!!!")).toBe("unknown");
-    expect(taskClassOf("")).toBe("unknown");
+  it("claim-vs-outcome: false-success only when a success claim meets a failed check", () => {
+    const m = computeMetrics([
+      run({
+        runId: "fs1",
+        outcome: "FALSE_SUCCESS",
+        agentClaim: "rollback success",
+        verifiedPostconditions: 0,
+        totalPostconditions: 1,
+      }),
+      run({
+        runId: "ok1",
+        outcome: "PASS",
+        agentClaim: "success",
+        verifiedPostconditions: 1,
+        totalPostconditions: 1,
+      }),
+    ]);
+    expect(m.falseSuccessRate).toBe(0.5);
+    expect(m.falseFailureRate).toBe(0);
+  });
+
+  it("taskClassOf: closed taxonomy on goal + tools fallback (no first-word guessing)", () => {
+    expect(taskClassOf("fix the login bug")).toBe("fix");
+    expect(taskClassOf("aggiorna la documentazione")).toBe("update");
+    expect(taskClassOf("qualcosa di non classificabile", ["write"])).toBe("create");
+    expect(taskClassOf("ricerca su il protocollo", ["web_search"])).toBe("analyze");
+    expect(taskClassOf("???")).toBe("unknown");
+  });
+
+  it("profile exposes totalRunsIngested ≥ sampleCount after pruning", () => {
+    const dir = makeDir();
+    let store = loadStore(storeDir(dir));
+    for (let i = 0; i < MAX_STORED_RUNS + 30; i++) {
+      store = appendRun(store, run({ runId: `r${i}` }));
+    }
+    saveStore(storeDir(dir), store);
+    const profile = buildProfile(loadStore(storeDir(dir)));
+    expect(profile.sampleCount).toBe(MAX_STORED_RUNS);
+    expect(profile.totalRunsIngested).toBeGreaterThanOrEqual(profile.sampleCount);
+  });
+
+  it("taskClassOf legacy alias: verb-less goal with no tools stays unknown", () => {
+    expect(taskClassOf("stuff and things")).toBe("unknown");
   });
 
   it("profile dataSufficient gates on MIN_SAMPLES", () => {

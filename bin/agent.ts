@@ -75,6 +75,7 @@ import {
   setDecisionSink,
 } from "../packages/cli/src/decision/runtime";
 import { CLI_VERSION } from "../packages/cli/src/index";
+import { createLearningEngine } from "../packages/cli/src/learning";
 import { probeServer, readMcpConfig } from "../packages/cli/src/mcp-client";
 import { createMdRenderer } from "../packages/cli/src/md";
 import {
@@ -906,6 +907,44 @@ async function dispatchCommand(
     console.log(
       `\n  ${marks.ok} Nota salvata (${entries.length}/50). Sarà nel system prompt dai prossimi turni.\n`,
     );
+    return;
+  }
+  if (input === "/learning") {
+    // Native Learning Layer inspector: deterministic profile over the run
+    // history stored under PROJECT_ROOT. OBSERVE-ONLY — display only.
+    try {
+      const learning = createLearningEngine(PROJECT_ROOT);
+      const profile = learning.profile();
+      const pct = (v: number): string => `${(v * 100).toFixed(1)}%`;
+      console.log(section("elysium learning profile"));
+      console.log(
+        `  Samples: ${String(profile.sampleCount)}${profile.dataSufficient ? "" : dim(" (insufficienti — soglia 5)")}`,
+      );
+      console.log(`  Ingested totali: ${String(profile.totalRunsIngested)}`);
+      console.log("");
+      const m = profile.metrics;
+      console.log(`  Verified success     ${pct(m.verifiedSuccessRate)}`);
+      console.log(`  False success        ${pct(m.falseSuccessRate)}`);
+      console.log(`  False failure        ${pct(m.falseFailureRate)}`);
+      console.log(`  Postconditions       ${pct(m.postconditionSuccessRate)}`);
+      console.log(
+        `  Average confidence   ${m.averageConfidence === null ? dim("n/d") : pct(m.averageConfidence)}`,
+      );
+      console.log(`  Retry rate           ${pct(m.retryRate)}`);
+      if (profile.taskPatterns.length > 0) {
+        console.log(`\n  ${bold("Patterns")}`);
+        for (const p of profile.taskPatterns) console.log(`  ${dim("•")} ${p.summary}`);
+      }
+      if (profile.failurePatterns.length > 0) {
+        console.log(`\n  ${bold("Failure patterns")}`);
+        for (const p of profile.failurePatterns) console.log(`  ${dim("•")} ${p.summary}`);
+      }
+      console.log(
+        `\n  ${dim("memoria dell'esperienza · informativa solo · nessuna decisione automatica")}\n`,
+      );
+    } catch {
+      console.log(`\n  ${marks.fail} Impossibile leggere il learning profile.\n`);
+    }
     return;
   }
   if (input === "/mcp") {

@@ -41,6 +41,15 @@ function boundRun(run: RunRecord): RunRecord {
       typeof run.evidenceCount === "number" && Number.isFinite(run.evidenceCount)
         ? Math.max(0, Math.trunc(run.evidenceCount))
         : 0,
+    verifiedPostconditions:
+      typeof run.verifiedPostconditions === "number" && Number.isFinite(run.verifiedPostconditions)
+        ? Math.max(0, Math.trunc(run.verifiedPostconditions))
+        : 0,
+    totalPostconditions:
+      typeof run.totalPostconditions === "number" && Number.isFinite(run.totalPostconditions)
+        ? Math.max(0, Math.trunc(run.totalPostconditions))
+        : 0,
+    ...(typeof run.agentClaim === "string" ? { agentClaim: cap(String(run.agentClaim), 200) } : {}),
   };
 }
 
@@ -100,15 +109,27 @@ export function saveStore(dir: string, store: LearningStoreShape): void {
   }
 }
 
+/** Cumulative ingestion counter (survives pruning; documented: ≥ runs.length). */
+export interface CumulativeCounts {
+  totalRunsIngested: number;
+}
+
 /** Append one run (dedup by runId: re-ingesting the same run is a no-op). */
-export function appendRun(store: LearningStoreShape, run: RunRecord): LearningStoreShape {
-  if (store.runs.some((r) => r.runId === run.runId)) return store;
+export function appendRun(
+  store: LearningStoreShape,
+  run: RunRecord,
+  cumulative: CumulativeCounts = { totalRunsIngested: 0 },
+): LearningStoreShape & { cumulative: CumulativeCounts } {
+  const isNew = !store.runs.some((r) => r.runId === run.runId);
   const bounded = boundRun(run);
   const counts = { ...store.taskClassCounts };
-  counts[bounded.taskClass] = (counts[bounded.taskClass] ?? 0) + 1;
+  if (isNew) counts[bounded.taskClass] = (counts[bounded.taskClass] ?? 0) + 1;
   return {
     ...store,
-    runs: [...store.runs, bounded].slice(-MAX_STORED_RUNS),
+    runs: isNew ? [...store.runs, bounded].slice(-MAX_STORED_RUNS) : store.runs,
     taskClassCounts: counts,
+    cumulative: {
+      totalRunsIngested: cumulative.totalRunsIngested + (isNew ? 1 : 0),
+    },
   };
 }

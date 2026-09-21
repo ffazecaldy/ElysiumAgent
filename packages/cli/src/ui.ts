@@ -545,6 +545,13 @@ export const HELP_CATALOG: readonly HelpEntry[] = [
     maturity: "stable",
   },
   {
+    name: "/learning",
+    signature: "/learning",
+    description: "Profilo di apprendimento: metriche e pattern dai run passati",
+    group: "Sessione",
+    maturity: "stable",
+  },
+  {
     name: "/export",
     signature: "/export [md|json]",
     description: "Export della sessione",

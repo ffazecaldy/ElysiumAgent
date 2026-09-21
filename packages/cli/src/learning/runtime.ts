@@ -27,17 +27,19 @@ const TRACKED_TOOLS = new Set(["bash", "write", "edit", "read", "web_fetch", "we
  */
 export function toRunRecord(
   record: EvaluationRecord,
-  opts: { goal?: string; retryCount?: number } = {},
+  opts: { goal?: string; retryCount?: number; agentClaim?: string } = {},
 ): RunRecord {
-  const tools = new Set<string>();
+  const toolsSet = new Set<string>();
   const failed: string[] = [];
   for (const item of record.evidence) {
     const tool = item.facts.tool;
-    if (typeof tool === "string" && TRACKED_TOOLS.has(tool)) tools.add(tool);
+    if (typeof tool === "string" && TRACKED_TOOLS.has(tool)) toolsSet.add(tool);
   }
   for (const p of record.postconditions) {
     if (p.ok === false) failed.push(p.name);
   }
+  const tools = [...toolsSet];
+  const verifiedPostconditions = record.postconditions.filter((p) => p.ok !== null).length;
   return {
     runId: record.runId,
     at: record.createdAt,
@@ -46,10 +48,13 @@ export function toRunRecord(
     score: record.score,
     confidence: record.confidence,
     retryCount: opts.retryCount ?? 0,
-    taskClass: taskClassOf(opts.goal ?? ""),
-    tools: [...tools],
+    taskClass: taskClassOf(opts.goal ?? "", tools),
+    tools,
     failedPostconditions: failed,
     evidenceCount: record.evidence.length,
+    verifiedPostconditions,
+    totalPostconditions: record.postconditions.length,
+    ...(opts.agentClaim !== undefined ? { agentClaim: opts.agentClaim } : {}),
   };
 }
 

@@ -30,7 +30,7 @@ export interface RunRecord {
   confidence: number | null;
   /** Number of repair/retry rounds observed (informative). */
   retryCount: number;
-  /** Bounded task class key (first goal word group, lowercase). */
+  /** Bounded task class key (closed taxonomy on goal+tools, no LLM). */
   taskClass: string;
   /** Tool names seen in evidence (bounded list, max 8). */
   tools: string[];
@@ -38,6 +38,12 @@ export interface RunRecord {
   failedPostconditions: string[];
   /** Evidence count backing the evaluation. */
   evidenceCount: number;
+  /** Postconditions verified (ok in {true,false}) — claim-vs-outcome needs it. */
+  verifiedPostconditions: number;
+  /** Total postconditions in the evaluation. */
+  totalPostconditions: number;
+  /** Free-text agent claim captured at evaluation time (bounded, optional). */
+  agentClaim?: string;
 }
 
 /**
@@ -77,6 +83,8 @@ export interface AgentPerformanceProfile {
   version: string;
   generatedAt: string;
   sampleCount: number;
+  /** Cumulative runs ever ingested (survives pruning; ≥ sampleCount). */
+  totalRunsIngested: number;
   metrics: PerformanceMetrics;
   /** Top task-class patterns (bounded, sorted by sampleCount desc). */
   taskPatterns: LearnedPattern[];
