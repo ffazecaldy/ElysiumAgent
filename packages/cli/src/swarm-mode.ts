@@ -55,6 +55,12 @@ import { collectEnvSecretValues, gateBashCommand } from "./bash-gate";
 import type { DecisionMode } from "./decision/policy";
 import type { DecisionProvider } from "./decision/provider";
 import { type HookContext, refineFailureCause, triageCritic } from "./decision/swarm-hooks";
+import {
+  type EvaluationRuntime,
+  buildCriticPostcondition,
+  buildRollbackPostcondition,
+  createEvaluationRuntime,
+} from "./evaluation";
 import type { BashCommandPolicy } from "./policy/bash-policy";
 import { markInterrupted } from "./run-state";
 import { createSwarmGit } from "./swarm-git";
@@ -550,6 +556,26 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
   // E6: per-run git checkpoints (opt-in). All functions no-op when disabled
   // or when git is unavailable — never blocks the run.
   const swarmGit = createSwarmGit(workspace, { enabled: opts.gitCheckpoints === true });
+  // Native Evaluation Layer (OBSERVE-ONLY): accumulates evidence facts from
+  // critic verdicts, git states and tool outcomes; emits EvaluationRecords on
+  // the swarm event trail. Never blocks, never mutates run behavior — the
+  // wire is null when the layer is off (no behavior change by construction).
+  const evaluationRuntime: EvaluationRuntime | null = createEvaluationRuntime({
+    runId: `swarm-${Date.now().toString(36)}`,
+    sink: (record) => {
+      emitSwarm({
+        type: "custom",
+        data: {
+          kind: "evaluation",
+          evaluationId: record.id,
+          verdict: record.verdict,
+          score: record.score,
+          confidence: record.confidence,
+          taskId: record.taskId,
+        },
+      } as never);
+    },
+  });
   // Durable run record (crash recovery / resume): opt-in via opts.runsRoot.
   // Created BEFORE planning so any failure can mark the run INTERRUPTED; a
   // hard process crash leaves it RUNNING → recovered later by stale detection.
@@ -896,6 +922,33 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
         opts.signal,
       );
       const verdict = parseCriticVerdict(raw);
+      // Evaluation Layer (OBSERVE-ONLY): the B17 fail-open pattern is recorded
+      // as evidence — the verdict itself is untouched (observe never blocks).
+      evaluationRuntime?.observe({
+        kind: "critic_verdict",
+        source: "critic",
+        facts: {
+          passed: verdict.passed,
+          failOpen: verdict.gaps.some((g) => g.includes("not valid JSON")),
+          confidence: verdict.passed ? 0.5 : 0.9,
+        },
+      });
+      evaluationRuntime?.observe({
+        kind: "postcondition_check",
+        source: "critic",
+        facts: (() => {
+          const check = buildCriticPostcondition({
+            passed: verdict.passed,
+            failOpen: verdict.gaps.some((g) => g.includes("not valid JSON")),
+          });
+          return {
+            name: check.name,
+            ok: check.ok,
+            expected: check.expected,
+            observed: check.observed,
+          };
+        })(),
+      });
       emitSwarm({
         type: "critic",
         data: {
@@ -951,6 +1004,29 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
           swarmGit.checkpoint(`task-${event.taskId ?? "task"}`);
         } catch {
           // git failure is non-fatal by contract
+        }
+        // Evaluation Layer (OBSERVE-ONLY): builder claim + git facts. The
+        // claim/status pair is what FALSE_SUCCESS detection keys on.
+        try {
+          const status = (event.data as { status?: unknown }).status;
+          const data = event.data as { summary?: unknown };
+          evaluationRuntime?.observe({
+            kind: "claim",
+            source: "tool",
+            facts: { taskId: event.taskId, status: String(status ?? "") },
+            claim:
+              status === "pass" || status === "partial"
+                ? `task ${String(event.taskId)} success`
+                : undefined,
+          });
+          void data;
+          evaluationRuntime?.observe({
+            kind: "git_state",
+            source: "git",
+            facts: { ...swarmGit.snapshot(), taskId: event.taskId },
+          });
+        } catch {
+          // observation failure never affects the run (OBSERVE-ONLY contract)
         }
         const usage = taskUsageById.get(event.taskId ?? "");
         emitSwarm({
@@ -1008,6 +1084,31 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
     const levelRubric: typeof rubric = { ...rubric, threshold: levelThreshold };
     const score = await gate.evaluate(artifact, levelRubric);
     scores.push({ taskId: subtask.task.id, weighted: score.weighted, passed: score.passed });
+  }
+
+  // Native Evaluation Layer (OBSERVE-ONLY): fold the accumulated evidence
+  // into the final record with the rollback postcondition (HEAD unchanged,
+  // clean tree) and emit it through the sink. Read-only: the run result below
+  // is computed exactly as before.
+  try {
+    const after = swarmGit.snapshot();
+    const rollbackCheck = buildRollbackPostcondition(
+      { head: after.head, untracked: [], modified: [] },
+      { head: after.head, untracked: after.untracked, modified: after.modified },
+    );
+    evaluationRuntime?.observe({
+      kind: "postcondition_check",
+      source: "git",
+      facts: {
+        name: rollbackCheck.name,
+        ok: rollbackCheck.ok,
+        expected: rollbackCheck.expected,
+        observed: rollbackCheck.observed,
+      },
+    });
+    evaluationRuntime?.evaluate(null);
+  } catch {
+    // evaluation is best-effort by contract
   }
 
   if (runState) {

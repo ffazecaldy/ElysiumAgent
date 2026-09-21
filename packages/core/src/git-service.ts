@@ -8,6 +8,16 @@ export interface DiffStat {
   deletions: number;
 }
 
+/** Read-only snapshot of the working tree state (Evaluation Layer). */
+export interface GitSnapshot {
+  /** Short HEAD hash, or null when the repo has no commits / git failed. */
+  head: string | null;
+  /** Untracked paths from `status --porcelain` (entries starting with `??`). */
+  untracked: string[];
+  /** Every other changed path (modified/staged/renamed…), i.e. all non-`??` entries. */
+  modified: string[];
+}
+
 /**
  * Minimal git wrapper around a working directory. Port of git_service.py v0.16.
  *
@@ -23,7 +33,36 @@ export class GitService {
     this.repoPath = repoPath;
   }
 
-  /** True if the repo path exists and is a git work tree. */
+  /**
+   * Read-only snapshot of the working tree for the Evaluation Layer: short
+   * HEAD hash (null when the repo has no commits yet or git fails), the
+   * untracked paths and every other changed path from `status --porcelain`.
+   * Never throws — any git failure degrades to the empty snapshot.
+   */
+  gitSnapshot(): GitSnapshot {
+    const head = this.git(["rev-parse", "--short", "HEAD"]);
+    // Raw output on purpose: git()'s trim() would eat the leading status
+    // column of the FIRST line (" M a.txt" → "M a.txt") and shift the parse.
+    const status = this.gitRaw(["status", "--porcelain"]);
+    const untracked: string[] = [];
+    const modified: string[] = [];
+    if (status !== null) {
+      for (const line of status.split("\n")) {
+        const record = line.trimEnd();
+        if (record.length < 4) continue; // "XY " + at least one path char
+        const path = record.slice(3);
+        const entry = path.startsWith('"') ? path.slice(1, -1) : path;
+        if (record.startsWith("??")) {
+          untracked.push(entry);
+        } else {
+          modified.push(entry);
+        }
+      }
+    }
+    return { head, untracked, modified };
+  }
+
+  /** True when the repo path exists and is a git work tree. */
   hasRepo(): boolean {
     return this.git(["rev-parse", "--is-inside-work-tree"]) !== null;
   }
@@ -168,6 +207,21 @@ export class GitService {
       return out.trim();
     } catch (err) {
       if (rethrow) throw err;
+      return null;
+    }
+  }
+
+  /** Same contract as {@link git} but keeps leading/trailing whitespace intact. */
+  private gitRaw(args: string[]): string | null {
+    try {
+      return execFileSync("git", args, {
+        cwd: this.repoPath,
+        encoding: "utf8",
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+    } catch {
       return null;
     }
   }

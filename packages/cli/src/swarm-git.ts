@@ -12,12 +12,21 @@ import fs from "node:fs";
 import path from "node:path";
 import { GitService } from "@elysium/core";
 
+/** Snapshot returned by the no-op/disabled paths — git state unknown → empty. */
+const EMPTY_SNAPSHOT: ReturnType<GitService["gitSnapshot"]> = {
+  head: null,
+  untracked: [],
+  modified: [],
+};
+
 /** Checkpoint/rollback surface used by the swarm loop. */
 export interface SwarmGit {
   /** Commit + tag `elysium/<phase>`; returns the tag or null. */
   checkpoint(phase: string): string | null;
   /** Roll each path back to a phase tag; returns how many succeeded. */
   rollbackFiles(paths: string[], phase: string): number;
+  /** Read-only working-tree snapshot (Evaluation Layer); empty snapshot when git is disabled/broken. */
+  snapshot(): ReturnType<GitService["gitSnapshot"]>;
 }
 
 /** True when git operations should run. */
@@ -34,6 +43,7 @@ export function createSwarmGit(
     return {
       checkpoint: () => null,
       rollbackFiles: () => 0,
+      snapshot: () => EMPTY_SNAPSHOT,
     };
   }
   const service = new GitService(workspace);
@@ -44,6 +54,7 @@ export function createSwarmGit(
     return {
       checkpoint: () => null,
       rollbackFiles: () => 0,
+      snapshot: () => EMPTY_SNAPSHOT,
     };
   }
 
@@ -102,6 +113,14 @@ export function createSwarmGit(
         }
       }
       return done;
+    },
+    snapshot(): ReturnType<GitService["gitSnapshot"]> {
+      try {
+        return service.gitSnapshot();
+      } catch {
+        // Defensive: gitSnapshot is specified never to throw.
+        return EMPTY_SNAPSHOT;
+      }
     },
   };
 }

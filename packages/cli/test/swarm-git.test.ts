@@ -7,6 +7,7 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { GitService } from "@elysium/core";
 import { afterEach, describe, expect, it } from "vitest";
 import { createSwarmGit } from "../src/swarm-git";
 import { runSwarmGoal } from "../src/swarm-mode";
@@ -68,6 +69,112 @@ describe("createSwarmGit", () => {
     const file = path.join(dir, "a.txt");
     fs.writeFileSync(file, "x");
     expect(swarmGit.rollbackFiles(["a.txt"], "never-tagged")).toBe(0);
+  });
+});
+
+describe("gitSnapshot / snapshot (Evaluation Layer)", () => {
+  it("clean repo after commit: empty untracked, non-null head", () => {
+    const dir = makeTempDir();
+    const swarmGit = createSwarmGit(dir);
+    fs.writeFileSync(path.join(dir, "code.txt"), "v1");
+    expect(swarmGit.checkpoint("snap-clean")).not.toBeNull();
+
+    const snap = swarmGit.snapshot();
+    expect(snap.head).not.toBeNull();
+    expect(snap.head).toBe(git(dir, ["rev-parse", "--short", "HEAD"]));
+    expect(snap.untracked).toEqual([]);
+    expect(snap.modified).toEqual([]);
+  });
+
+  it("new file lands in untracked; modified file lands in modified", () => {
+    const dir = makeTempDir();
+    const swarmGit = createSwarmGit(dir);
+    const tracked = path.join(dir, "tracked.txt");
+    fs.writeFileSync(tracked, "v1");
+    expect(swarmGit.checkpoint("snap-status")).not.toBeNull();
+
+    fs.writeFileSync(path.join(dir, "fresh.txt"), "new");
+    fs.writeFileSync(tracked, "v2-changed");
+
+    const snap = swarmGit.snapshot();
+    expect(snap.untracked).toContain("fresh.txt");
+    expect(snap.modified).toContain("tracked.txt");
+    expect(snap.untracked).not.toContain("tracked.txt");
+    // staged-then-edited (AM) and staged-only (A ) count as modified too
+    fs.writeFileSync(path.join(dir, "staged.txt"), "s1");
+    git(dir, ["add", "staged.txt"]);
+    fs.writeFileSync(path.join(dir, "staged.txt"), "s2");
+    const snap2 = swarmGit.snapshot();
+    expect(snap2.modified).toContain("staged.txt");
+    expect(snap2.head).not.toBeNull();
+  });
+
+  it("GitService.gitSnapshot matches the wrapper on the same repo", () => {
+    const dir = makeTempDir();
+    const service = new GitService(dir);
+    service.init();
+    fs.writeFileSync(path.join(dir, "f.txt"), "one");
+    service.commit("first");
+
+    fs.writeFileSync(path.join(dir, "u.txt"), "untracked");
+    const snap = service.gitSnapshot();
+    expect(snap.head).toBe(git(dir, ["rev-parse", "--short", "HEAD"]));
+    expect(snap.untracked).toContain("u.txt");
+    expect(snap.modified).toEqual([]);
+
+    fs.writeFileSync(path.join(dir, "f.txt"), "two");
+    expect(service.gitSnapshot().modified).toContain("f.txt");
+  });
+
+  it("empty repo (init, no commits) → head null, files still reported", () => {
+    const dir = makeTempDir();
+    const service = new GitService(dir);
+    service.init();
+    fs.writeFileSync(path.join(dir, "only.txt"), "x");
+
+    const snap = service.gitSnapshot();
+    expect(snap.head).toBeNull();
+    expect(snap.untracked).toContain("only.txt");
+    expect(snap.modified).toEqual([]);
+  });
+
+  it("corrupt git (removed .git) → empty snapshot, never throws", () => {
+    const dir = makeTempDir();
+    const swarmGit = createSwarmGit(dir);
+    fs.writeFileSync(path.join(dir, "a.txt"), "x");
+    expect(swarmGit.checkpoint("snap-corrupt")).not.toBeNull();
+
+    fs.rmSync(path.join(dir, ".git"), { recursive: true, force: true });
+
+    let snap: ReturnType<typeof swarmGit.snapshot> | undefined;
+    expect(() => {
+      snap = swarmGit.snapshot();
+    }).not.toThrow();
+    expect(snap).toEqual({ head: null, untracked: [], modified: [] });
+
+    const bare = new GitService(dir);
+    expect(() => bare.gitSnapshot()).not.toThrow();
+    expect(bare.gitSnapshot()).toEqual({ head: null, untracked: [], modified: [] });
+  });
+
+  it("snapshot after rollbackFiles reflects the restored worktree", () => {
+    const dir = makeTempDir();
+    const swarmGit = createSwarmGit(dir);
+    const file = path.join(dir, "code.txt");
+    fs.writeFileSync(file, "v1");
+    expect(swarmGit.checkpoint("snap-rollback")).not.toBeNull();
+
+    fs.writeFileSync(file, "v2-broken");
+    let snap = swarmGit.snapshot();
+    expect(snap.modified).toContain("code.txt");
+
+    expect(swarmGit.rollbackFiles(["code.txt"], "snap-rollback")).toBe(1);
+    expect(fs.readFileSync(file, "utf-8")).toBe("v1");
+
+    snap = swarmGit.snapshot();
+    expect(snap.head).not.toBeNull();
+    expect(snap.modified).not.toContain("code.txt");
+    expect(snap.untracked).toEqual([]);
   });
 });
 
