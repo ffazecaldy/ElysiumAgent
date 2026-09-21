@@ -11,10 +11,10 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { runSwarmGoal, type SwarmEvent } from "../src/swarm-mode";
+import { type DecisionProvider, NullDecisionProvider } from "../src/decision/provider";
 import { approvalToSwarmAction } from "../src/decision/swarm-hooks";
-import { NullDecisionProvider, type DecisionProvider } from "../src/decision/provider";
 import { TypeSafeDecisionProvider } from "../src/decision/typesafe";
+import { type SwarmEvent, runSwarmGoal } from "../src/swarm-mode";
 
 // ── scripted provider (same SSE pattern as swarm-mode.test.ts) ──
 interface ScriptedServer {

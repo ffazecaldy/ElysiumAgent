@@ -6,3 +6,4 @@ dist/
 benchmarks/results/
 *.log
 .DS_Store
+probe-results/

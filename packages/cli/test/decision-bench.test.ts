@@ -6,25 +6,25 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  buildBashGrayZone,
-  buildCriticTriage,
-  buildEvidenceStrength,
-  buildFailureCause,
-  buildRiskRefinement,
-} from "../src/decision/questions";
-import {
-  combineDecision,
   DEFAULT_DECISION_POLICY,
   type DecisionMode,
+  combineDecision,
 } from "../src/decision/policy";
-import { minimizeState } from "../src/decision/sanitize";
-import { triageCritic } from "../src/decision/swarm-hooks";
 import type {
   DecisionAnswers,
   DecisionEvaluation,
   DecisionProvider,
   DecisionQuestion,
 } from "../src/decision/provider";
+import {
+  buildBashGrayZone,
+  buildCriticTriage,
+  buildEvidenceStrength,
+  buildFailureCause,
+  buildRiskRefinement,
+} from "../src/decision/questions";
+import { minimizeState } from "../src/decision/sanitize";
+import { triageCritic } from "../src/decision/swarm-hooks";
 
 interface BenchCase {
   name: string;

@@ -27,6 +27,12 @@
     }
   },
   "files": {
-    "ignore": ["**/dist/**", "**/node_modules/**", "**/benchmarks/results/**", "**/agent-python/**"]
+    "ignore": [
+      "**/dist/**",
+      "**/node_modules/**",
+      "**/benchmarks/results/**",
+      "**/agent-python/**",
+      "**/probe-results/**"
+    ]
   }
 }

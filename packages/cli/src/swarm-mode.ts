@@ -52,12 +52,12 @@ import {
 } from "@elysium/core";
 import { redactObject, redactText } from "@elysium/core";
 import { collectEnvSecretValues, gateBashCommand } from "./bash-gate";
+import type { DecisionMode } from "./decision/policy";
+import type { DecisionProvider } from "./decision/provider";
+import { type HookContext, refineFailureCause, triageCritic } from "./decision/swarm-hooks";
 import type { BashCommandPolicy } from "./policy/bash-policy";
 import { markInterrupted } from "./run-state";
 import { createSwarmGit } from "./swarm-git";
-import { triageCritic, refineFailureCause, type HookContext } from "./decision/swarm-hooks";
-import type { DecisionProvider } from "./decision/provider";
-import type { DecisionMode } from "./decision/policy";
 import { finishRun, recordRunPhase as markRunPhase, startRunRecord } from "./swarm-run-store";
 import { type TaskPathPolicy, checkPath } from "./task-ownership";
 

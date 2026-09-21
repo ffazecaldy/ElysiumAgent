@@ -350,7 +350,7 @@ export async function triageCritic(
     // is "run the critic" (REQUIRE_APPROVAL). The ONLY permitted relaxation is
     // enforce + obvious-pass + high confidence (documented GAP 4 exception);
     // everything else goes through the standard combine (escalation-only).
-    let combined;
+    let combined: { outcome: DecisionOutcome; shadowSemantic: DecisionOutcome | null };
     if (ctx.mode === "enforce" && obvious) {
       combined = {
         outcome: {
