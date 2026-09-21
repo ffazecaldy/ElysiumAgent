@@ -82,7 +82,13 @@ describe("redirect targets", () => {
   });
 
   it("normalizes slashes and relative paths against cwd", () => {
-    expect(extractRedirectTargets("echo a > ..\\out.txt", "/repo/sub")).toEqual(["/repo/out.txt"]);
+    // Ambiguous backslash words yield BOTH interpreter readings (POSIX escape
+    // resolution and cmd.exe literal path) — the caller denies when ANY
+    // candidate falls outside the writable roots.
+    expect(extractRedirectTargets("echo a > ..\\out.txt", "/repo/sub")).toEqual([
+      "/repo/out.txt",
+      "/repo/sub/..out.txt",
+    ]);
     expect(extractRedirectTargets("echo a > ./x/../y.txt", "/repo")).toEqual(["/repo/y.txt"]);
   });
 

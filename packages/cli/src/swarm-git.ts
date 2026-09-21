@@ -89,13 +89,16 @@ export function createSwarmGit(
       if (!refExists(ref)) {
         return 0;
       }
+      // Count only VERIFIED restores: rollbackPath throws when the worktree
+      // does not really match the tag afterwards, and a thrown path is a
+      // failure, never a success.
       let done = 0;
       for (const p of paths) {
         try {
           service.rollbackPath(p, ref);
           done++;
         } catch {
-          // count as failed, continue
+          // verification failed → not counted
         }
       }
       return done;

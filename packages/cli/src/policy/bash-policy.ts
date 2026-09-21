@@ -55,6 +55,18 @@ const BUILTIN_DENY_PATTERNS: DenyPattern[] = [
   { tokens: ["invoke-expression"], reason: "'invoke-expression' is denied" },
   { tokens: ["iex"], reason: "'iex' is denied" },
   { tokens: ["sudo"], reason: "'sudo' is denied" },
+  // Inline PowerShell: same code-execution bypass as `-enc`, different flag.
+  { tokens: ["powershell", "-c"], reason: "inline PowerShell ('-c') is denied" },
+  { tokens: ["powershell", "-command"], reason: "inline PowerShell ('-Command') is denied" },
+  { tokens: ["pwsh", "-c"], reason: "inline PowerShell ('-c') is denied" },
+  { tokens: ["pwsh", "-command"], reason: "inline PowerShell ('-Command') is denied" },
+  // Destructive Windows shell forms the POSIX deny list cannot see.
+  { tokens: ["cmd", "/c", "rmdir"], reason: "destructive 'cmd /c rmdir' is denied" },
+  { tokens: ["cmd", "/c", "rd"], reason: "destructive 'cmd /c rd' is denied" },
+  { tokens: ["cmd", "/c", "del"], reason: "destructive 'cmd /c del' is denied" },
+  { tokens: ["cmd", "/c", "erase"], reason: "destructive 'cmd /c erase' is denied" },
+  { tokens: ["rmdir", "/s"], reason: "destructive 'rmdir /s' is denied" },
+  { tokens: ["rd", "/s"], reason: "destructive 'rd /s' is denied" },
 ];
 
 /** Split a command into chain segments on `&&`, `||`, `;`, `|` and newline. */
@@ -155,6 +167,56 @@ function tokenizeSegment(segment: string): string[] {
   return tokens;
 }
 
+/** Strip one pair of surrounding quotes and resolve the escapes the shell
+ * resolves inside them: double quotes keep the backslash escapes (`\"`,
+ * `\\`), single quotes are fully literal, and a backslash outside quotes
+ * escapes the next character. What comes out is what the shell would pass
+ * to exec — `git pu\sh`, `"git" "push"` and `$'git push'` all normalize to
+ * `git push`. */
+function shellResolve(token: string): string {
+  let out = "";
+  let quote: string | null = null;
+  let i = 0;
+  // `$'…'` (ANSI-C) and `$"…"` are quoting forms: the `$` prefix is shell
+  // syntax, not part of the exec'd word.
+  if (token.length >= 2 && token[0] === "$" && (token[1] === "'" || token[1] === '"')) {
+    i = 1;
+  }
+  for (; i < token.length; i++) {
+    const ch = token[i] ?? "";
+    if (quote !== null) {
+      if (quote === '"' && ch === "\\") {
+        const next = token[i + 1] ?? "";
+        if (next === '"' || next === "\\" || next === "$" || next === "`") {
+          out += next;
+          i++;
+          continue;
+        }
+        out += ch;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+        continue;
+      }
+      out += ch;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "\\") {
+      const next = token[i + 1] ?? "";
+      out += next;
+      i++;
+      continue;
+    }
+    out += ch;
+  }
+  return out;
+}
+
 /** Strip one pair of surrounding quotes from a token. */
 function unquote(token: string): string {
   if (token.length >= 2) {
@@ -237,13 +299,13 @@ function isWithinAnyRoot(roots: string[], target: string): boolean {
   });
 }
 
-/** Base command of a token list: skips leading `VAR=...` assignments, unquotes. */
+/** Base command of a token list: skips leading `VAR=...` assignments, resolves shell escapes. */
 function commandBase(tokens: string[]): string {
   for (const token of tokens) {
     if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
       continue;
     }
-    return unquote(token).toLowerCase();
+    return shellResolve(token).toLowerCase();
   }
   return "";
 }
@@ -302,29 +364,37 @@ function recursiveRmReason(tokens: string[]): string | null {
   return recursive ? "destructive recursive 'rm' is denied" : null;
 }
 
-/** Deny reason for one segment, or `null` when the segment passes. */
+/** Deny reason for one segment, or `null` when the segment passes.
+ * DOUBLE-INTERPRETER AWARENESS: on Windows exec() runs commands through
+ * cmd.exe, where a backslash is a path separator, not an escape. Each token
+ * is therefore resolved BOTH ways — POSIX (backslash escapes) and cmd
+ * (backslash literal) — and the deny list matches on whichever reading it
+ * finds, negating if either interpretation is denied. */
 function denyReasonForSegment(segmentTokens: string[], customDenied: string[]): string | null {
   if (segmentTokens.length === 0) {
     return null;
   }
-  const lowered = segmentTokens.map((token) => token.toLowerCase());
-  for (const entry of customDenied) {
-    const pattern = patternTokens(entry);
-    if (pattern.length > 0 && matchesPattern(lowered, pattern)) {
-      return `denied command pattern: '${entry.trim()}'`;
+  const posix = segmentTokens.map((token) => shellResolve(token).toLowerCase());
+  const cmdRaw = segmentTokens.map((token) => token.toLowerCase());
+  for (const lowered of [posix, cmdRaw]) {
+    for (const entry of customDenied) {
+      const pattern = patternTokens(entry);
+      if (pattern.length > 0 && matchesPattern(lowered, pattern)) {
+        return `denied command pattern: '${entry.trim()}'`;
+      }
     }
-  }
-  for (const builtin of BUILTIN_DENY_PATTERNS) {
-    if (matchesPattern(lowered, builtin.tokens)) {
-      return builtin.reason;
+    for (const builtin of BUILTIN_DENY_PATTERNS) {
+      if (matchesPattern(lowered, builtin.tokens)) {
+        return builtin.reason;
+      }
     }
-  }
-  const rmReason = recursiveRmReason(lowered);
-  if (rmReason !== null) {
-    return rmReason;
-  }
-  if (segmentTokens.length === 1 && SHELL_INTERPRETERS.has(lowered[0] ?? "")) {
-    return "piping into a shell interpreter is denied";
+    const rmReason = recursiveRmReason(lowered);
+    if (rmReason !== null) {
+      return rmReason;
+    }
+    if (segmentTokens.length === 1 && SHELL_INTERPRETERS.has(lowered[0] ?? "")) {
+      return "piping into a shell interpreter is denied";
+    }
   }
   return null;
 }
@@ -357,15 +427,20 @@ function pathArgs(segmentTokens: string[]): string[] {
     if (token.startsWith("-") && token.length > 1) {
       continue;
     }
-    args.push(unquote(token));
+    // Both readings for ambiguous backslash words (see extractRedirectTargets).
+    const resolved = shellResolve(unquote(token));
+    const word = unquote(token);
+    args.push(...(resolved === word ? [word] : [word, resolved]));
   }
   return args;
 }
 
 /**
  * Extract every output-redirect target (`>`, `>>`, `2>`, ...) from a command,
- * slash-normalized and resolved against `cwd` when relative. File-descriptor
- * duplications (`2>&1`) are not paths and are skipped.
+ * plus the cmd.exe READING of ambiguous backslash paths (`..\x` on cmd is a
+ * parent-dir path, on POSIX an escaped filename): BOTH candidates are
+ * returned so the caller can deny when any interpretation falls outside the
+ * writable roots. File-descriptor duplications (`2>&1`) are skipped.
  */
 export function extractRedirectTargets(command: string, cwd?: string): string[] {
   const targets: string[] = [];
@@ -376,15 +451,132 @@ export function extractRedirectTargets(command: string, cwd?: string): string[] 
       if (!isOutputRedirectOp(token)) {
         continue;
       }
-      const raw = unquote(tokens[i + 1] ?? "");
+      const rawWord = unquote(tokens[i + 1] ?? "");
       i++;
-      if (raw.length === 0 || raw.startsWith("&")) {
+      if (rawWord.length === 0 || rawWord.startsWith("&")) {
         continue;
       }
-      targets.push(normalizePath(raw, cwd));
+      const resolved = shellResolve(rawWord);
+      const candidates = resolved === rawWord ? [rawWord] : [rawWord, resolved];
+      for (const candidate of candidates) {
+        const normalized = normalizePath(candidate, cwd);
+        if (!targets.includes(normalized)) {
+          targets.push(normalized);
+        }
+      }
     }
   }
   return targets;
+}
+
+/**
+ * Embedded shell code visible inside a segment: `$(...)` bodies, backtick
+ * spans, and the inline-code argument of `eval` / `bash -c` / `python -c` /
+ * `node -e` / similar. Each extracted command is re-checked through the full
+ * policy recursively, so `echo $(git push)` is caught as the `git push` it
+ * really executes.
+ */
+function extractEmbeddedCommands(segment: string): string[] {
+  const found: string[] = [];
+  // $( ... ) with paren balance; unterminated → the rest is embedded.
+  let idx = segment.indexOf("$(");
+  while (idx !== -1) {
+    let depth = 0;
+    let end = -1;
+    for (let i = idx + 1; i < segment.length; i++) {
+      const ch = segment[i] ?? "";
+      if (ch === "(") depth++;
+      else if (ch === ")") {
+        depth--;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    if (end === -1) {
+      found.push(segment.slice(idx + 2));
+      break;
+    }
+    found.push(segment.slice(idx + 2, end));
+    idx = segment.indexOf("$(", end);
+  }
+  // ` ... ` spans.
+  const bt = segment.split("`");
+  for (let i = 1; i < bt.length; i += 2) {
+    found.push(bt[i] ?? "");
+  }
+  // Inline-code arguments of interpreters. `cmd /c …` re-parses its whole
+  // tail as a command line, so everything after the flag is embedded.
+  const tokens = tokenizeSegment(segment);
+  const base = commandBase(tokens);
+  const codeFlags = new Set(["-c", "-e", "-p"]);
+  if (base === "eval" || base === "source" || base === ".") {
+    found.push(
+      tokens
+        .slice(1)
+        .map((t) => shellResolve(unquote(t)))
+        .join(" "),
+    );
+  } else if (base === "cmd") {
+    const tail = tokens.slice(1).filter((t) => shellResolve(unquote(t)).toLowerCase() !== "/c");
+    found.push(tail.map((t) => shellResolve(unquote(t))).join(" "));
+  } else {
+    for (let i = 1; i < tokens.length; i++) {
+      const flag = shellResolve(unquote(tokens[i] ?? ""));
+      const bare = flag.replace(/^--?/, "");
+      if (
+        codeFlags.has(flag) ||
+        (flag.startsWith("--") && (bare === "command" || bare === "eval"))
+      ) {
+        const next = tokens[i + 1];
+        if (next !== undefined) found.push(shellResolve(unquote(next)));
+      }
+    }
+  }
+  return found.filter((s) => s.trim().length > 0);
+}
+
+/**
+ * Deny-or-approval reason for shell indirection the static token view cannot
+ * fully see through: command substitution and inline-interpreter invocation.
+ * The embedded command (when statically visible) is checked separately via
+ * {@link extractEmbeddedCommands}; the FORM itself is always at least an
+ * approval — the REPL asks the operator, the swarm refuses approvals.
+ */
+function indirectionFormReason(segment: string): string | null {
+  if (/\$\(/.test(segment)) {
+    return "command substitution '$(...)' requires approval (embedded code is re-checked statically)";
+  }
+  if (segment.includes("`")) {
+    return "command substitution backticks require approval (embedded code is re-checked statically)";
+  }
+  const tokens = tokenizeSegment(segment).map((token) => shellResolve(token).toLowerCase());
+  const base = commandBase(tokens);
+  if (base === "eval" || base === "source" || base === ".") {
+    return `'${base}' re-interprets its argument as shell code and requires approval`;
+  }
+  if (base === "bash" || base === "sh" || base === "zsh" || base === "dash") {
+    const flags = tokens.slice(1).filter((t) => t.startsWith("-") && t.length > 1);
+    if (flags.some((f) => f.includes("c") || f.includes("i") || f.includes("s"))) {
+      return `${base} with inline code (-c/-i/-s) requires approval`;
+    }
+  }
+  if (base === "cmd" && tokens.some((t) => t === "/c" || t === "/k")) {
+    return "cmd /c re-parses its tail as a command line and requires approval";
+  }
+  if (
+    (base === "python" ||
+      base === "python3" ||
+      base === "node" ||
+      base === "perl" ||
+      base === "ruby" ||
+      base === "php") &&
+    tokens.some((t) => t === "-e" || t === "-c" || t === "-p")
+  ) {
+    return `${base} inline code (-c/-e/-p) requires approval`;
+  }
+  return null;
 }
 
 /**
@@ -414,6 +606,26 @@ export function checkBashCommand(
     }
   }
 
+  // (2b) Substitution / indirection forms: every statically visible embedded
+  // command is re-checked through the full policy (a nested `git push` is
+  // DENY, not an approval), and the form itself always requires approval —
+  // the REPL asks the operator, the swarm refuses approvals by contract.
+  for (const segment of segments) {
+    for (const inner of extractEmbeddedCommands(segment)) {
+      const nested = checkBashCommand(policy, inner, cwd);
+      if (nested.verdict === "DENY") {
+        return {
+          verdict: "DENY",
+          reason: `embedded command denied: ${nested.reason ?? inner.trim()}`,
+        };
+      }
+    }
+    const form = indirectionFormReason(segment);
+    if (form !== null) {
+      return { verdict: "REQUIRE_APPROVAL", reason: form };
+    }
+  }
+
   // (2) Deny list (built-ins plus policy.denied), token-aware.
   for (const segment of segments) {
     const reason = denyReasonForSegment(tokenizeSegment(segment), policy.denied);
@@ -429,20 +641,21 @@ export function checkBashCommand(
     }
   }
 
-  // (4) rm/mv/cp writing outside the writable roots.
+  // (4) rm/mv/cp/tee writing outside the writable roots. `tee` writes to
+  // every file operand (its stdin argument is not a path).
   for (const segment of segments) {
     const tokens = tokenizeSegment(segment);
     const base = commandBase(tokens);
-    if (base !== "rm" && base !== "mv" && base !== "cp") {
+    if (base !== "rm" && base !== "mv" && base !== "cp" && base !== "tee") {
       continue;
     }
     const args = pathArgs(tokens);
     if (args.length === 0) {
       continue;
     }
-    const writeTargets = (base === "rm" ? args : [args[args.length - 1] ?? ""]).map((target) =>
-      normalizePath(target, cwd),
-    );
+    const writeTargets = (
+      base === "rm" || base === "tee" ? args : [args[args.length - 1] ?? ""]
+    ).map((target) => normalizePath(target, cwd));
     for (const target of writeTargets) {
       if (!isWithinAnyRoot(policy.writableRoots, target)) {
         return { verdict: "DENY", reason: `write outside writable roots: ${target}` };

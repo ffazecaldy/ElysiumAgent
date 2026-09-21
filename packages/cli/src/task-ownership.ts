@@ -33,7 +33,23 @@ export function normalizePath(path: string): string {
   while (out.startsWith("./")) {
     out = out.slice(2);
   }
-  return out;
+  // Collapse `.` and `a/..` segments the way the filesystem would resolve
+  // them: a glob match must see the real path, not the raw spelling
+  // (`src/../escape.ts` is `escape.ts` — matching it against `src/**` would
+  // let a write escape its ownership root).
+  const stack: string[] = [];
+  for (const part of out.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      // Leading `..` stays (it points outside any root and no allowed glob
+      // anchored at the root can match it — fail closed).
+      if (stack.length > 0 && stack[stack.length - 1] !== "..") stack.pop();
+      else stack.push("..");
+      continue;
+    }
+    stack.push(part);
+  }
+  return stack.join("/");
 }
 
 /** True when the glob contains only the supported syntax: `**`, `*`, `?`, literal chars. */

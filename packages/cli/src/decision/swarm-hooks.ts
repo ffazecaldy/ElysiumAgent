@@ -23,6 +23,7 @@ import {
 } from "./policy";
 import type { DecisionEvaluation, DecisionProvider } from "./provider";
 import {
+  FAILURE_CAUSE_LEVELS,
   buildCriticTriage,
   buildEvidenceStrength,
   buildFailureCause,
@@ -172,8 +173,10 @@ export async function refineRisk(
     const applied = ctx.mode === "enforce";
     return {
       level: applied ? level : input.deterministicLevel,
-      securitySensitive,
-      requiresReview,
+      // Probe B9: these two flags are ENFORCE-mode signals — in shadow they
+      // must never leak to the caller (shadow records, it does not advise).
+      securitySensitive: applied ? securitySensitive : null,
+      requiresReview: applied ? requiresReview : null,
       record: emit(ctx, "risk-refinement", question.state, evaluation, combined),
     };
   } catch {
@@ -277,6 +280,10 @@ export async function refineFailureCause(
       evaluation.ok &&
       answer !== undefined &&
       answer.kind === "choice" &&
+      // Taxonomy guard (probe B8): a model CLAIM is not a VALIDATED decision.
+      // Only values the builder's criteria actually define can pass, at the
+      // required confidence — anything else stays UNKNOWN.
+      (FAILURE_CAUSE_LEVELS as readonly string[]).includes(answer.choice) &&
       answer.choice !== "UNKNOWN" && // Jev cannot invent categories / must not answer UNKNOWN
       answer.confidence >= 0.7 // insufficient confidence → stays UNKNOWN
     ) {

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { join, resolve, sep } from "node:path";
 
 export interface DiffStat {
   files: number;
@@ -75,9 +75,55 @@ export class GitService {
     return head;
   }
 
-  /** Restore a single path from a tag. No-op if anything is missing. */
+  /**
+   * Restore a single path to its state at `tag` and VERIFY the worktree
+   * really matches the tag afterwards:
+   * - tracked path: content restored via checkout, then hash-compared
+   *   against the tag's blob — a mismatch throws (false rollback success is
+   *   how broken artifacts survive a repair loop);
+   * - path absent at `tag`: the worktree copy (if any) is removed — leaving
+   *   it would keep post-tag breakage alive after a rollback;
+   * - unknown tag or in-repo resolution failure: no-op (historical contract
+   *   — callers pass full `elysium/<phase>` refs and check existence first).
+   * Throws only when the tag exists and the restore could not be verified.
+   */
   rollbackPath(path: string, tag: string): void {
-    this.git(["checkout", tag, "--", path]);
+    const ref = `refs/tags/${tag}`;
+    if (this.git(["rev-parse", "--verify", "--quiet", ref]) === null) {
+      return; // unknown tag: no-op (historical behavior)
+    }
+    const normalized = path.replace(/\\/g, "/").replace(/^\.\//, "");
+    if (!this.isInsideRepo(normalized)) {
+      throw new Error(`rollback refused: '${path}' resolves outside the repository`);
+    }
+    const tagBlob = this.git(["rev-parse", "--verify", "--quiet", `${tag}:${normalized}`]);
+    if (tagBlob !== null) {
+      // Present at the tag: restore, then VERIFY the worktree blob matches.
+      this.git(["checkout", tag, "--", normalized]);
+      const workBlob = this.git(["hash-object", join(this.repoPath, normalized)]);
+      if (workBlob === null || tagBlob !== workBlob) {
+        throw new Error(`rollback verification failed for '${path}' at ${tag}`);
+      }
+      return;
+    }
+    // Absent at the tag: restore means "remove" — a surviving post-tag file
+    // would keep the exact breakage the rollback is meant to undo.
+    const target = join(this.repoPath, normalized);
+    try {
+      rmSync(target, { force: true });
+    } catch {
+      // fall through to the existence check below
+    }
+    if (existsSync(target)) {
+      throw new Error(`rollback removal failed for '${path}' at ${tag}`);
+    }
+  }
+
+  /** True when the repo-relative path stays inside the repository directory. */
+  private isInsideRepo(relative: string): boolean {
+    const resolved = resolve(this.repoPath, relative);
+    const repoAbs = resolve(this.repoPath);
+    return resolved === repoAbs || resolved.startsWith(repoAbs + sep);
   }
 
   /** Parse `git diff --numstat` between two tags (or worktree vs fromTag). Null when diff fails. */

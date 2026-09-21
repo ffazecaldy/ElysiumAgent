@@ -9,6 +9,7 @@
 import { createHash } from "node:crypto";
 import type { DecisionMode, DecisionOutcome } from "./policy";
 import type { DecisionEvaluation } from "./provider";
+import { stableStringify } from "./sanitize";
 
 /** One consultable decision, ready for telemetry. */
 export interface DecisionRecord {
@@ -74,7 +75,7 @@ export interface DecisionRecordInput {
 /** Build a DecisionRecord from an evaluation. Pure. */
 export function buildDecisionRecord(input: DecisionRecordInput): DecisionRecord {
   const stateHash = createHash("sha256")
-    .update(JSON.stringify(input.state))
+    .update(stableStringify(input.state))
     .digest("hex")
     .slice(0, 16);
   const at = new Date().toISOString();

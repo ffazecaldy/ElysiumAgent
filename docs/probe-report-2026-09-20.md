@@ -1,5 +1,12 @@
 # Probe Report — 10 aree testate, buchi trovati (2026-09-20)
 
+> **FIX STATUS (2026-09-20, commit successivo):** Fase 1 chiusa — B1 B2 B3 B4 B5 B7 B8 B9 B10 B11
+> B13(static) B18 corretti e RIVERIFICATI rieseguendo la stessa campagna di probe (findings v2:
+> tutti i P0 ora bloccati/di grado corretto). Regression tests: `bash-policy-hardening.test.ts`
+> (16) + `probe-hardening.test.ts` (19). Nota onesta: B13 è chiuso a livello command-policy
+> (interpreti inline gated); l'ISOLAMENTO di rete reale resta lavoro architetturale separato —
+> command policy ≠ network isolation.
+
 Campagna offensiva su 10 aree dell'harness. Sonde runtime eseguite offline (tsx, mock provider,
 server locali) — nessun provider reale chiamato. Raw findings: `probe-results/<area>/findings.json`
 (non committato). Baseline: 503 test | 1 skip, typecheck ok, build ok.

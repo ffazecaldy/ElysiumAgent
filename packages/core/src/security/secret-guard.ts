@@ -152,27 +152,33 @@ export function redactText(text: string, extraValues?: string[]): string {
  * Deep-walk `obj`, redacting every string found in it (directly or nested in
  * arrays/objects). Returns a structural copy; the input is never mutated.
  * Non-string leaves (numbers, booleans, null, undefined, Dates, ...) are
- * carried over as-is.
+ * carried over as-is. Cycle-safe: a cyclic reference collapses to a
+ * `***REDACTED:CIRCULAR***` marker instead of overflowing the stack — a
+ * pathological tool result must never crash the redaction boundary.
  */
 export function redactObject<T>(obj: T, extraValues?: string[]): T {
-  if (typeof obj === "string") {
-    return redactText(obj, extraValues) as unknown as T;
-  }
-  if (Array.isArray(obj)) {
-    const out: unknown[] = [];
-    for (const item of obj) {
-      out.push(redactObject(item, extraValues));
+  const seen = new WeakSet<object>();
+  const walk = (value: unknown): unknown => {
+    if (typeof value === "string") {
+      return redactText(value, extraValues);
     }
-    return out as unknown as T;
-  }
-  if (obj !== null && typeof obj === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-      out[key] = redactObject(value, extraValues);
+    if (typeof value === "object" && value !== null) {
+      if (seen.has(value)) {
+        return "***REDACTED:CIRCULAR***";
+      }
+      seen.add(value);
+      if (Array.isArray(value)) {
+        return value.map(walk);
+      }
+      const out: Record<string, unknown> = {};
+      for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+        out[key] = walk(item);
+      }
+      return out;
     }
-    return out as unknown as T;
-  }
-  return obj;
+    return value;
+  };
+  return walk(obj) as T;
 }
 
 /**
