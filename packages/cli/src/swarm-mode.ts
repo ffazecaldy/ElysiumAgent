@@ -61,6 +61,7 @@ import {
   buildRollbackPostcondition,
   createEvaluationRuntime,
 } from "./evaluation";
+import { createLearningEngine } from "./learning";
 import type { BashCommandPolicy } from "./policy/bash-policy";
 import { markInterrupted } from "./run-state";
 import { createSwarmGit } from "./swarm-git";
@@ -1106,7 +1107,21 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
         observed: rollbackCheck.observed,
       },
     });
-    evaluationRuntime?.evaluate(null);
+    const finalRecord = evaluationRuntime?.evaluate(null) ?? null;
+    // Native Learning Layer (OBSERVE-ONLY): persist the evaluated run into
+    // the performance memory under the run root. Best-effort, never throws,
+    // never feeds back into this run — memory for future analysis only.
+    if (finalRecord !== null && opts.runsRoot !== undefined) {
+      try {
+        const learning = createLearningEngine(opts.runsRoot as string);
+        learning.recordLearning(finalRecord, {
+          goal: opts.goal,
+          retryCount: scores.filter((s) => !s.passed).length,
+        });
+      } catch {
+        // learning persistence is best-effort by contract
+      }
+    }
   } catch {
     // evaluation is best-effort by contract
   }
