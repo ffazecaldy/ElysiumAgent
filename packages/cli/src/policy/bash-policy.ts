@@ -713,6 +713,24 @@ function indirectionFormReason(segment: string): string | null {
   if (/[<>]\(/.test(segment)) {
     return "process substitution requires approval (embedded command is re-checked statically)";
   }
+  // Env-assignment poisoning (campaign 3 / C5): `set PATH=…`, `export
+  // NODE_OPTIONS=…`, `env PATH=… git …`, `NODE_OPTIONS=… npm …` all reroute
+  // executable resolution or inject code into child processes. Dangerous
+  // variables require approval wherever they are assigned; benign ones pass.
+  const ENV_DANGEROUS =
+    /^(path|pathext|node_options|pythonpath|perl5lib|home|userprofile|temp|tmp|shell|comspec|ifs|ld_library_path|dyld_library_path|ld_preload|bash_env|env)$/i;
+  const envAssignRe = /(?:^|[;&\s])(?:set|export|setenv)?\s*([A-Za-z_][A-Za-z0-9_]*)=(?!=)/g;
+  for (const m of segment.matchAll(envAssignRe)) {
+    const name = m[1] ?? "";
+    if (ENV_DANGEROUS.test(name)) {
+      return `assignment to '${name}' requires approval (executable resolution / child-process code injection)`;
+    }
+  }
+  if (/\benv\s+-/i.test(segment)) {
+    // `env` with FLAGS re-runs its command in a crafted environment (-i wipes
+    // everything, -u unsets, --split-string injects): not statically safe.
+    return "'env' with flags requires approval";
+  }
   const tokens = tokenizeSegment(segment).map((token) => shellResolve(token).toLowerCase());
   const base = commandBase(tokens);
   if (base === "eval" || base === "source" || base === ".") {

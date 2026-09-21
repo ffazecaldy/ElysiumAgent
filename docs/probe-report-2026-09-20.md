@@ -1,5 +1,17 @@
 # Probe Report — 10 aree testate, buchi trovati (2026-09-20)
 
+> **CAMPAIGN STATUS (aggiornato):**
+> - Fase 1 (B1-B18 P0/P1): chiusa e riverificata — commit `51908f5`.
+> - Campagna 2 (symlink/TOCTOU, exe hijack, shell avanzata): chiusa e riverificata — commit `31c3330`.
+> - Campagna 3 (env poisoning, git deep, concurrency, cross-layer, fuzz): C5 env poisoning
+>   CHIUSO (7 varianti → APPROVE, benigni → RUN); C6 git honesty VERIFICATO (deleted-restore,
+>   blocker-dir restore, submodule, concurrent checkpoint immutabile); C7 scritture interleaved
+>   senza torn, progress atomic; C8 cross-layer coerente fail-safe; C9 fuzz 400 comandi 0 throw,
+>   NaN/Infinity su wire → malformed, prototype pollution assente.
+> - Nota architetturale (da piano separato): il tool bash "nudo" senza gate resta capace di
+>   eseguire tutto — il boundary è gateBashCommand nei percorsi REPL/swarm, e ogni NUOVO percorso
+>   bash deve passarci (invariante già documentato nella skill).
+
 > **FIX STATUS (2026-09-20, commit successivo):** Fase 1 chiusa — B1 B2 B3 B4 B5 B7 B8 B9 B10 B11
 > B13(static) B18 corretti e RIVERIFICATI rieseguendo la stessa campagna di probe (findings v2:
 > tutti i P0 ora bloccati/di grado corretto). Regression tests: `bash-policy-hardening.test.ts`
