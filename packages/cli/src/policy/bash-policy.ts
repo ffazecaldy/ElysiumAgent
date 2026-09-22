@@ -526,6 +526,78 @@ function denyReasonForSegment(segmentTokens: string[], customDenied: string[]): 
   return null;
 }
 
+/**
+ * xargs indirection (F-01): `echo src | xargs rm -rf` executes `rm -rf` with
+ * stdin-supplied arguments — the segment head is `xargs`, so head-anchored
+ * deny checks never see the destructive target. When an `xargs` in the
+ * segment names a TARGET command (the first non-flag token after the xargs
+ * executor and its flags), the target is evaluated with the SAME analysis as
+ * a direct command ({@link recursiveRmReason} + {@link denyReasonForSegment}).
+ * PARITY DECISION: the xargs deny set is exactly the direct-command deny set
+ * — no stricter, no looser. Plain `xargs rm file` stays ALLOW because plain
+ * `rm file` is ALLOW directly (only RECURSIVE rm and deny-listed commands are
+ * denied; there is no builtin deny pattern for plain non-recursive `rm`);
+ * `xargs rm -rf` / `xargs git push` DENY exactly as they would directly.
+ * `xargs` with NO target command defaults to `echo` → benign.
+ */
+function xargsTargetReason(segmentTokens: string[], customDenied: string[]): string | null {
+  const canonical = canonicalTokens(segmentTokens);
+  // The xargs executor: first token whose de-qualified base is `xargs`
+  // (`xargs`, `/usr/bin/xargs`, `xargs.exe`, also in a wrapper position).
+  let xargsIndex = -1;
+  for (let i = 0; i < canonical.length; i++) {
+    if (commandBase([canonical[i] ?? ""]) === "xargs") {
+      xargsIndex = i;
+      break;
+    }
+  }
+  if (xargsIndex === -1) {
+    return null;
+  }
+  // GNU xargs value-flags consume the NEXT token when spelled bare (`-n 2`);
+  // bundled spellings (`-I{}`, `-n2`, `--arg-file=f`) carry their value and
+  // are self-contained (one token).
+  const XARGS_VALUE_FLAGS = new Set([
+    "-I",
+    "-n",
+    "-s",
+    "-a",
+    "-d",
+    "-E",
+    "-P",
+    "-L",
+    "-e",
+    "--arg-file",
+  ]);
+  let i = xargsIndex + 1;
+  while (i < canonical.length) {
+    const word = shellResolve(unquote(canonical[i] ?? ""));
+    if (!word.startsWith("-")) {
+      // First non-flag token after the flags is the TARGET command; the
+      // remaining tokens are its arguments. Evaluate it exactly as a direct
+      // command: recursive-rm analysis plus the full deny list.
+      const targetTokens = canonical.slice(i);
+      const reason =
+        recursiveRmReason(targetTokens) ?? denyReasonForSegment(targetTokens, customDenied);
+      if (reason !== null) {
+        const rendered = targetTokens.map((t) => shellResolve(unquote(t))).join(" ");
+        return `xargs executes denied command: ${rendered}`;
+      }
+      return null;
+    }
+    let consumesNext = false;
+    for (const flag of XARGS_VALUE_FLAGS) {
+      if (word === flag) {
+        consumesNext = true;
+        break;
+      }
+    }
+    i += consumesNext ? 2 : 1;
+  }
+  // Flags only, no target: xargs defaults to `echo` — benign.
+  return null;
+}
+
 /** Path-like operands of a segment: skips flags, redirects and env assignments. */
 function pathArgs(segmentTokens: string[]): string[] {
   const args: string[] = [];
@@ -806,11 +878,18 @@ export function checkBashCommand(
     }
   }
 
-  // (2) Deny list (built-ins plus policy.denied), token-aware.
+  // (2) Deny list (built-ins plus policy.denied), token-aware. Also sees
+  // through xargs indirection (F-01): the TARGET command of an `xargs` gets
+  // the same deny analysis as a direct command.
   for (const segment of segments) {
-    const reason = denyReasonForSegment(tokenizeSegment(segment), policy.denied);
+    const segmentTokens = tokenizeSegment(segment);
+    const reason = denyReasonForSegment(segmentTokens, policy.denied);
     if (reason !== null) {
       return { verdict: "DENY", reason };
+    }
+    const xargsReason = xargsTargetReason(segmentTokens, policy.denied);
+    if (xargsReason !== null) {
+      return { verdict: "DENY", reason: xargsReason };
     }
   }
 
