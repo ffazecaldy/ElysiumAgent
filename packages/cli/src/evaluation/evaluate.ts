@@ -48,6 +48,13 @@ function hasContradiction(evidence: EvidenceItem[], postconditions: Postconditio
  * - FAIL: at least one postcondition ok=false (no success claim involved).
  * - PASS: every postcondition verified ok=true, none contradicted.
  * - INSUFFICIENT: nothing verifiable (all null / none present), no contradiction.
+ *
+ * Task-outcome fold (F-02): a `task_outcome` evidence item is AUTHORITATIVE
+ * for the verdict. FAIL/FALSE_SUCCESS degrade the verdict to that outcome —
+ * local gate health can never upgrade a task-level failure to PASS.
+ * FALSE_FAILURE/INSUFFICIENT replace a local PASS (an unobserved task must
+ * not be recorded as a clean pass). A local FALSE_SUCCESS/FAIL is NEVER
+ * upgraded by a task_outcome PASS. Score stays the local postcondition share.
  */
 export function evaluateEvidence(
   evidence: EvidenceItem[],
@@ -67,6 +74,20 @@ export function evaluateEvidence(
     verdict = "PASS";
   } else {
     verdict = "INSUFFICIENT";
+  }
+
+  // F-02 fold: the task-level outcome, when explicitly observed, is the
+  // authority on whether the run actually succeeded (F-04 dimension split).
+  // Downgrade-only semantics: FAIL/FALSE_SUCCESS replace PASS/INSUFFICIENT;
+  // FALSE_SUCCESS is preserved when present (more informative than FAIL);
+  // FALSE_FAILURE/INSUFFICIENT replace a local PASS only. No task_outcome
+  // value ever upgrades a local FALSE_SUCCESS/FAIL.
+  const taskOutcomeItem = [...evidence].reverse().find((item) => item.kind === "task_outcome");
+  const taskRaw = taskOutcomeItem?.facts.outcome;
+  if (taskRaw === "FAIL" || taskRaw === "FALSE_SUCCESS") {
+    if (verdict === "PASS" || verdict === "INSUFFICIENT") verdict = taskRaw;
+  } else if (taskRaw === "FALSE_FAILURE" || taskRaw === "INSUFFICIENT") {
+    if (verdict === "PASS") verdict = taskRaw;
   }
 
   const score =

@@ -25,6 +25,12 @@ export {
   evaluateEvidence,
 } from "./evaluate";
 export {
+  type ComponentState,
+  computeTaskOutcome,
+  type TaskOutcomeInput,
+  type TaskOutcomeResult,
+} from "./task-outcome";
+export {
   createEvaluationRuntime,
   type EvaluationRuntime,
   type EvaluationRuntimeOptions,

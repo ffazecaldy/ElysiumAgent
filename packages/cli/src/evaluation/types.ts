@@ -17,10 +17,12 @@ export type EvidenceKind =
   | "tool_outcome"
   | "postcondition_check"
   | "exit_code"
-  | "claim";
+  | "claim"
+  | "security_event"
+  | "task_outcome";
 
 /** Which subsystem produced the item. */
-export type EvidenceSource = "critic" | "repair" | "git" | "tool" | "report";
+export type EvidenceSource = "critic" | "repair" | "git" | "tool" | "report" | "policy";
 
 /** One observed fact, bounded and cycle-safe (see evidence.ts bounds). */
 export interface EvidenceItem {
@@ -47,8 +49,11 @@ export interface Postcondition {
   ok: boolean | null;
 }
 
-/** Deterministic verdicts, facts-only — no model in the loop. */
-export type EvalVerdict = "PASS" | "FAIL" | "INSUFFICIENT" | "FALSE_SUCCESS";
+/** Deterministic verdicts, facts-only — no model in the loop. FALSE_FAILURE
+ * (F-02/F-04) = the agent claimed failure while every verifiable fact passed:
+ * a claim/outcome mismatch with a verified-good task, unified with the
+ * learning layer's claimVsOutcome vocabulary. */
+export type EvalVerdict = "PASS" | "FAIL" | "INSUFFICIENT" | "FALSE_SUCCESS" | "FALSE_FAILURE";
 
 /** The immutable output of one evaluation pass. */
 export interface EvaluationRecord {

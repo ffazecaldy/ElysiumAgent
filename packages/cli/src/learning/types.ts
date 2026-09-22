@@ -13,7 +13,7 @@
 export const LEARNING_STORE_VERSION = 1;
 
 /** Outcome class of one evaluated run (mirrors the Evaluation verdicts). */
-export type RunOutcome = "PASS" | "FAIL" | "INSUFFICIENT" | "FALSE_SUCCESS";
+export type RunOutcome = "PASS" | "FAIL" | "INSUFFICIENT" | "FALSE_SUCCESS" | "FALSE_FAILURE";
 
 /** One evaluated run as the learning pipeline ingests it. */
 export interface RunRecord {

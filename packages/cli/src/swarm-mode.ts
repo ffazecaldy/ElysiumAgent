@@ -62,6 +62,7 @@ import {
   buildRollbackPostcondition,
   createEvaluationRuntime,
 } from "./evaluation";
+import { computeTaskOutcome } from "./evaluation/task-outcome";
 import { createLearningEngine } from "./learning";
 import type { BashCommandPolicy } from "./policy/bash-policy";
 import { markInterrupted } from "./run-state";
@@ -583,6 +584,13 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
       } as never);
     },
   });
+  // F-02: task-level accumulators — destructive deletions actually executed
+  // (gate-bypass signature) and the last builder claim / critic verdict,
+  // folded into the final evaluation record. Gate BLOCKs are enforcement
+  // (already emitted as security_event evidence), never counted as failures.
+  let destructiveDeletionCount = 0;
+  let lastBuilderClaim = "";
+  let lastCriticPassed: boolean | null = null;
   // Durable run record (crash recovery / resume): opt-in via opts.runsRoot.
   // Created BEFORE planning so any failure can mark the run INTERRUPTED; a
   // hard process crash leaves it RUNNING → recovered later by stale detection.
@@ -756,6 +764,13 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
       if (call.name === "bash" && typeof call.arguments.command === "string") {
         const gate = gateBashCommand(effectiveBashPolicy, call.arguments.command, workspace);
         if (gate.action === "BLOCK" || gate.action === "APPROVE") {
+          // F-02: the enforcement event itself is evidence (policy source),
+          // observed BEFORE the final fold so it lands inside the record.
+          evaluationRuntime?.observe({
+            kind: "security_event",
+            source: "policy",
+            facts: { tool: "bash", blocked: true, reason: gate.reason ?? "policy" },
+          });
           emitSwarm({
             type: "task_tool",
             data: { taskId: task.id, tool: call.name, isError: true },
@@ -801,6 +816,31 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
           type: "task_tool",
           data: { taskId: task.id, tool: call.name, isError: result.isError },
         });
+        // F-02 security signal — runs for EVERY executed bash call (error or
+        // not: `node -e "fs.rmSync(...)"` may exit non-zero AND delete files).
+        // A workspace file that existed before the call and is gone after it
+        // is an executed destructive deletion, the gate-bypass signature.
+        if (call.name === "bash") {
+          const afterFilesBash = await listWorkspaceFiles(workspace);
+          let disappeared = 0;
+          for (const file of knownFiles) {
+            if (!afterFilesBash.has(file)) disappeared += 1;
+          }
+          if (disappeared > 0) {
+            destructiveDeletionCount += 1;
+            evaluationRuntime?.observe({
+              kind: "security_event",
+              source: "policy",
+              facts: {
+                tool: "bash",
+                blocked: false,
+                violation: "destructive-deletion",
+                filesDisappeared: disappeared,
+                callIsError: result.isError,
+              },
+            });
+          }
+        }
         if (!result.isError) {
           const afterFiles = await listWorkspaceFiles(workspace);
           for (const file of afterFiles) {
@@ -929,6 +969,7 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
         opts.signal,
       );
       const verdict = parseCriticVerdict(raw);
+      lastCriticPassed = verdict.passed;
       // Evaluation Layer (OBSERVE-ONLY): the B17 fail-open pattern is recorded
       // as evidence — the verdict itself is untouched (observe never blocks).
       evaluationRuntime?.observe({
@@ -1017,6 +1058,17 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
         try {
           const status = (event.data as { status?: unknown }).status;
           const data = event.data as { summary?: unknown };
+          // F-02: capture the builder's claim. The harness event carries the
+          // deterministic `status`; when the orchestrator forwards the final
+          // assistant text in `summary`, prefer the real text (richer than the
+          // synthetic "task X success" string).
+          if (typeof data.summary === "string" && data.summary.trim().length > 0) {
+            lastBuilderClaim = data.summary.trim();
+          } else if (status === "pass" || status === "partial") {
+            lastBuilderClaim = `task ${String(event.taskId)} success`;
+          } else if (status === "fail") {
+            lastBuilderClaim = "task failed";
+          }
           evaluationRuntime?.observe({
             kind: "claim",
             source: "tool",
@@ -1157,6 +1209,26 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
         expected: rollbackCheck.expected,
         observed: rollbackCheck.observed,
       },
+    });
+    // F-02: observe the TASK-LEVEL outcome from explicitly tracked component
+    // facts — security enforcement/violations, executed destructive deletions,
+    // the builder claim, the critic verdict and the LOCAL GATE postconditions
+    // accumulated so far (this observation runs after the rollback fold, so
+    // those postconditions are inside the record already; they are extracted
+    // from evidence by evaluate()). A gate BLOCK is correct enforcement, NOT a
+    // task failure; an executed destructive deletion IS a violation.
+    const taskOutcome = computeTaskOutcome({
+      claim: lastBuilderClaim,
+      securityViolation: destructiveDeletionCount > 0,
+      tests: "not_run",
+      build: "not_applicable",
+      postconditions:
+        lastCriticPassed === null ? [] : [{ name: "critic-verified", ok: lastCriticPassed }],
+    });
+    evaluationRuntime?.observe({
+      kind: "task_outcome",
+      source: "report",
+      facts: { outcome: taskOutcome.outcome, reason: taskOutcome.reason },
     });
     const finalRecord = evaluationRuntime?.evaluate(null) ?? null;
     // Native Learning Layer (OBSERVE-ONLY): persist the evaluated run into

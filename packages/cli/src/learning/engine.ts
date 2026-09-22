@@ -54,10 +54,17 @@ export function claimVsOutcome(runs: RunRecord[]): {
     const claimedFailure =
       run.outcome === "FAIL" ||
       run.outcome === "INSUFFICIENT" ||
+      run.outcome === "FALSE_FAILURE" ||
       (run.agentClaim !== undefined && !SUCCESS_CLAIM_RE.test(run.agentClaim));
     if (claimedFailure) {
-      if (verified > 0 && verified === run.totalPostconditions) falseFailure += 1;
-      else unclassified += 1;
+      // FALSE_FAILURE arrives pre-classified: the evaluator verified every
+      // fact green while the claim said failure — count it directly.
+      if (
+        run.outcome === "FALSE_FAILURE" ||
+        (verified > 0 && verified === run.totalPostconditions)
+      ) {
+        falseFailure += 1;
+      } else unclassified += 1;
     } else if (run.outcome === "FALSE_SUCCESS") {
       falseSuccess += 1;
     } else if (run.outcome === "PASS") {

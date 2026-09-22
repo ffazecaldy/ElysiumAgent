@@ -149,7 +149,11 @@ export function revalidateStrategy(
     return true;
   });
   const failing = inScope.filter(
-    (r) => r.outcome === "FAIL" || r.outcome === "FALSE_SUCCESS" || r.score < 1,
+    (r) =>
+      r.outcome === "FAIL" ||
+      r.outcome === "FALSE_SUCCESS" ||
+      r.outcome === "FALSE_FAILURE" ||
+      r.score < 1,
   );
   const failureRate = inScope.length > 0 ? failing.length / inScope.length : 0;
   const base = {
