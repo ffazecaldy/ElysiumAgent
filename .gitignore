@@ -4,6 +4,7 @@ dist/
 *.tsbuildinfo
 .elysium/
 benchmarks/results/
+benchmarks/capability/runs/
 *.log
 .DS_Store
 probe-results/
