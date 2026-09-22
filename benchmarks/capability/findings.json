@@ -30,6 +30,17 @@
       "actual": "Zero candidates → zero gate decisions → zero strategies. The A/B apply legs could only be exercised with an externally seeded strategy store.",
       "impact": "The closed feedback loop depends on the evaluation layer's completeness; the weakest link propagates. Not a bug in the gate itself (which correctly rejects/accepts candidates), but in the upstream signal quality.",
       "discoveredAt": "adaptive phase analysis"
+    },
+    {
+      "id": "F-05",
+      "component": "bash-policy NETWORK_COMMANDS denylist",
+      "severity": "P1",
+      "reproduction": "gateBashCommand(policy with networkAllowed=false, 'nslookup example.com') -> RUN. Same for dig and host. Network-capable dedicated DNS tools are absent from the denylist; a DNS channel passes the gate today.",
+      "expected": "DNS-capable tools must be BLOCK (or APPROVE) when networkAllowed=false.",
+      "actual": "RUN — the denylist covers curl/wget/nc/ssh/ftp/telnet only.",
+      "impact": "DNS-based exfiltration/lookup escapes the command policy; per the network isolation audit, command policy is hardening, NOT isolation — but DNS tools are a known, cheap-to-deny family and their absence is a policy gap.",
+      "discoveredAt": "consolidation phase network matrix (network-isolation.test.ts pins current behavior)",
+      "status": "OPEN — classified, intentionally not fixed during the consolidation phase"
     }
   ]
 }

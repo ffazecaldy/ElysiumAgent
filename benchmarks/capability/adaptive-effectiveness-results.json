@@ -1,0 +1,29 @@
+{
+  "at": "2026-09-22T20:24:15.963Z",
+  "defaultGateVerdicts": [
+    {
+      "pattern": "tool:bash",
+      "reliable": true
+    }
+  ],
+  "approvedStrategy": [
+    {
+      "id": "strategy-tool-bash-v1",
+      "action": "SUGGEST_EXTRA_CHECK",
+      "pattern": "tool:bash"
+    }
+  ],
+  "abRows": [
+    "pair1 disabled: verdict=PASS applied=0 suggested=0",
+    "pair1 apply: verdict=PASS applied=0 suggested=1",
+    "pair2 disabled: verdict=PASS applied=0 suggested=0",
+    "pair2 apply: verdict=PASS applied=0 suggested=1",
+    "pair3 disabled: verdict=PASS applied=0 suggested=0",
+    "pair3 apply: verdict=PASS applied=0 suggested=1"
+  ],
+  "revalidation": {
+    "still": "degraded",
+    "invalidated": "invalidated",
+    "degraded": "degraded"
+  }
+}

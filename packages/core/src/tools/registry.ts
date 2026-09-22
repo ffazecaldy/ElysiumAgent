@@ -6,6 +6,7 @@ import { createReadTool } from "./builtins/read";
 import { type WebToolOptions, createWebFetchTool } from "./builtins/web-fetch";
 import { createWebSearchTool } from "./builtins/web-search";
 import { createWriteTool } from "./builtins/write";
+import { type NetworkIsolationProvider, NullIsolationProvider } from "./isolation";
 
 /** Registry of tools keyed by unique name; produces provider-facing definitions. */
 export class ToolRegistry {
@@ -42,6 +43,12 @@ export interface BuiltinToolsOptions {
    * isError "network disabled for this run" result without any fetch.
    */
   network?: boolean;
+  /**
+   * Network-isolation seam for the bash tool. Default (and current
+   * behavior everywhere): NullIsolationProvider — no OS-level network
+   * isolation; enforcement stays with the bash command policy.
+   */
+  isolation?: NetworkIsolationProvider;
 }
 
 export function createBuiltinTools(policy: PathPolicy, options: BuiltinToolsOptions = {}): Tool[] {
@@ -50,7 +57,7 @@ export function createBuiltinTools(policy: PathPolicy, options: BuiltinToolsOpti
     createReadTool(policy),
     createWriteTool(policy),
     createEditTool(policy),
-    createBashTool(policy),
+    createBashTool(policy, options.isolation ?? new NullIsolationProvider()),
     createWebFetchTool(webOptions),
     createWebSearchTool(webOptions),
   ];

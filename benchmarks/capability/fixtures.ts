@@ -10,8 +10,22 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+/** git with bounded retry: transient Windows STATUS_DLL_INIT_FAILED
+ * (0xC0000142, exit 3221225794) can hit git under heavy process pressure;
+ * a short backoff resolves it without masking real failures. */
 function sh(cmd: string, cwd: string): void {
-  execFileSync("git", cmd, { cwd, encoding: "utf8" });
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      execFileSync("git", cmd, { cwd, encoding: "utf8" });
+      return;
+    } catch (error) {
+      lastError = error;
+      const status = (error as { status?: number }).status;
+      if (status !== 3221225794) throw error;
+    }
+  }
+  throw lastError;
 }
 
 function w(root: string, rel: string, content: string): void {

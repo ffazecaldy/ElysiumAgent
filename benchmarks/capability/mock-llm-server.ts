@@ -20,6 +20,8 @@ export interface MockSwarmServer {
   served: () => number;
   /** Replace the builder script queue (per-task, called before each run). */
   setBuilderTurns: (turns: ScriptedTurn[]) => void;
+  /** Replace the planner script queue (concurrency campaign: N-subtask plans). */
+  setPlannerTurns: (turns: ScriptedTurn[]) => void;
 }
 
 /** Heuristic turn classifier — decides which script queue serves a request. */
@@ -167,6 +169,9 @@ export function startMockSwarmServer(): Promise<MockSwarmServer> {
         served: () => servedCount,
         setBuilderTurns: (turns) => {
           queues.builder = [...turns];
+        },
+        setPlannerTurns: (turns) => {
+          queues.planner = [...turns];
         },
       });
     });

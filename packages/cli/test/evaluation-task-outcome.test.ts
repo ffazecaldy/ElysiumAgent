@@ -93,6 +93,36 @@ describe("computeTaskOutcome (F-02 unit matrix)", () => {
     expect(r.outcome).toBe("PASS");
   });
 
+  it("required component unknown -> INSUFFICIENT even with success claim + verified postcondition", () => {
+    const r = computeTaskOutcome({
+      claim: "Task success.",
+      tests: "unknown",
+      postconditions: [{ name: "critic-verified", ok: true }],
+    });
+    expect(r.outcome).toBe("INSUFFICIENT");
+    expect(r.reason).toContain("unknown");
+  });
+
+  it("unknown is reported distinctly from not_run (never silently coerced)", () => {
+    const unknown = computeTaskOutcome({ claim: "Task success.", tests: "unknown" });
+    const notRun = computeTaskOutcome({ claim: "Task success.", tests: "not_run" });
+    expect(unknown.outcome).toBe("INSUFFICIENT");
+    expect(notRun.outcome).toBe("INSUFFICIENT");
+    expect(unknown.reason).not.toBe(notRun.reason);
+    expect(unknown.reason).toContain("uninterpretable");
+  });
+
+  it("security violation + unknown component -> security still outranks (FAIL/FALSE_SUCCESS)", () => {
+    const fs = computeTaskOutcome({
+      claim: "Task success.",
+      securityViolation: true,
+      tests: "unknown",
+    });
+    expect(fs.outcome).toBe("FALSE_SUCCESS");
+    const fail = computeTaskOutcome({ tests: "unknown", securityViolation: true });
+    expect(fail.outcome).toBe("FAIL");
+  });
+
   it("claimed failure + all components passed + verified postcondition -> FALSE_FAILURE", () => {
     const r = computeTaskOutcome({
       claim: "could not verify anything",

@@ -1,6 +1,7 @@
 import { exec, spawn } from "node:child_process";
 import type { PathPolicy, Tool, ToolContext, ToolResult } from "../../types/tools";
 import { argString, err, ok, telemetry } from "../internal";
+import { type NetworkIsolationProvider, NullIsolationProvider } from "../isolation.js";
 import { evaluateCommand, resolveWithin } from "../policy";
 
 function bashTimeoutMs(): number {
@@ -33,16 +34,29 @@ interface ProcessOutcome {
   spawnError?: string;
 }
 
-function runCommand(command: string, cwd: string, signal: AbortSignal): Promise<ProcessOutcome> {
+async function runCommand(
+  command: string,
+  cwd: string,
+  signal: AbortSignal,
+  isolation: NetworkIsolationProvider,
+): Promise<ProcessOutcome> {
+  // Executable hijack guard (probe C2): cmd.exe resolves BARE command names
+  // from the CURRENT DIRECTORY before PATH, so a workspace-shipped
+  // `git.cmd`/`npm.bat` shadows the real tool. Setting this env var makes
+  // Windows skip the cwd in executable resolution for this child only.
+  const childEnv: NodeJS.ProcessEnv =
+    process.platform === "win32"
+      ? { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" }
+      : { ...process.env };
+  // Network-isolation seam (benchmarks/capability/network-isolation-audit.md):
+  // the provider may rewrite spawn options before the child exists. The
+  // default NullIsolationProvider adds only a marker env var — the upstream
+  // command policy is hardening, NOT OS-level network isolation.
+  const spawnOptions = await isolation.isolate(
+    { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: childEnv },
+    cwd,
+  );
   return new Promise((resolve) => {
-    // Executable hijack guard (probe C2): cmd.exe resolves BARE command names
-    // from the CURRENT DIRECTORY before PATH, so a workspace-shipped
-    // `git.cmd`/`npm.bat` shadows the real tool. Setting this env var makes
-    // Windows skip the cwd in executable resolution for this child only.
-    const childEnv: NodeJS.ProcessEnv =
-      process.platform === "win32"
-        ? { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" }
-        : { ...process.env };
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -50,40 +64,36 @@ function runCommand(command: string, cwd: string, signal: AbortSignal): Promise<
     }, bashTimeoutMs());
     timer.unref?.();
     let killWatchdog: NodeJS.Timeout | undefined;
-    const child = exec(
-      command,
-      { cwd, windowsHide: true, maxBuffer: 8 * 1024 * 1024, env: childEnv },
-      (error, stdout, stderr) => {
-        clearTimeout(timer);
-        if (killWatchdog !== undefined) clearTimeout(killWatchdog);
-        let code: number | null = null;
-        let killed = false;
-        let spawnError: string | undefined;
-        if (error) {
-          const rawCode = (error as NodeJS.ErrnoException & { code?: unknown }).code;
-          if (typeof rawCode === "number") {
-            code = rawCode;
-          } else if (typeof rawCode === "string") {
-            // exec() reports spawn failures (ENOENT, EACCES, ...) as string codes.
-            spawnError = rawCode;
-          }
-          if (
-            (error as { killed?: unknown }).killed === true ||
-            (error as { signal?: unknown }).signal !== undefined
-          ) {
-            // exec-level timeout kill and signal terminations surface here.
-            killed = true;
-          }
+    const child = exec(command, spawnOptions, (error, stdout, stderr) => {
+      clearTimeout(timer);
+      if (killWatchdog !== undefined) clearTimeout(killWatchdog);
+      let code: number | null = null;
+      let killed = false;
+      let spawnError: string | undefined;
+      if (error) {
+        const rawCode = (error as NodeJS.ErrnoException & { code?: unknown }).code;
+        if (typeof rawCode === "number") {
+          code = rawCode;
+        } else if (typeof rawCode === "string") {
+          // exec() reports spawn failures (ENOENT, EACCES, ...) as string codes.
+          spawnError = rawCode;
         }
-        resolve({
-          stdout,
-          stderr,
-          code,
-          killed: timedOut || killed,
-          spawnError,
-        });
-      },
-    );
+        if (
+          (error as { killed?: unknown }).killed === true ||
+          (error as { signal?: unknown }).signal !== undefined
+        ) {
+          // exec-level timeout kill and signal terminations surface here.
+          killed = true;
+        }
+      }
+      resolve({
+        stdout,
+        stderr,
+        code,
+        killed: timedOut || killed,
+        spawnError,
+      });
+    });
     const onAbort = (): void => {
       // On Windows exec() runs `cmd /c <cmd>`; killing the cmd wrapper
       // re-parents (or races) the real child and either way the orphan holds
@@ -145,7 +155,10 @@ function runCommand(command: string, cwd: string, signal: AbortSignal): Promise<
   });
 }
 
-export function createBashTool(policy: PathPolicy): Tool {
+export function createBashTool(
+  policy: PathPolicy,
+  isolation: NetworkIsolationProvider = new NullIsolationProvider(),
+): Tool {
   return {
     name: "bash",
     description:
@@ -213,6 +226,7 @@ export function createBashTool(policy: PathPolicy): Tool {
           command,
           workdir,
           ctx.signal,
+          isolation,
         );
         const content = [stdout, stderr].filter((s) => s.length > 0).join("\n");
         if (spawnError !== undefined) {

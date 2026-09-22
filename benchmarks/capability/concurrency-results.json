@@ -1,0 +1,72 @@
+{
+  "at": "2026-09-22T15:44:40.996Z",
+  "results": [
+    {
+      "scenario": "independent N=2",
+      "ok": true,
+      "files": 2,
+      "taskIds": 2,
+      "tags": 2,
+      "learning": 1,
+      "durationMs": 919
+    },
+    {
+      "scenario": "independent N=4",
+      "ok": true,
+      "files": 4,
+      "taskIds": 4,
+      "tags": 4,
+      "learning": 1,
+      "durationMs": 1247
+    },
+    {
+      "scenario": "independent N=8",
+      "ok": true,
+      "files": 8,
+      "taskIds": 8,
+      "tags": 8,
+      "learning": 1,
+      "durationMs": 2001
+    },
+    {
+      "scenario": "same-file contention",
+      "ok": true,
+      "winner": "task-2 (last writer)",
+      "torn": false
+    },
+    {
+      "scenario": "checkpoint contention N=4",
+      "ok": true,
+      "tags": 4,
+      "distinctCommits": 1,
+      "aliasingIsDocumented": true,
+      "files": 4
+    },
+    {
+      "scenario": "shared progress",
+      "ok": true,
+      "progressWrittenByRunSwarmGoal": false,
+      "note": "progress.md is REPL-layer only — documented limitation"
+    },
+    {
+      "scenario": "concurrent learning x8",
+      "ok": true,
+      "fulfilled": 8,
+      "stored": 8,
+      "uniqueIds": 8
+    },
+    {
+      "scenario": "concurrent adaptive x4",
+      "ok": true,
+      "strategiesBefore": 0,
+      "strategiesAfter": 0
+    },
+    {
+      "scenario": "stress 8x4=32 builders",
+      "ok": true,
+      "filesTotal": 32,
+      "crashes": 0,
+      "wallMs": 10311
+    }
+  ]
+}

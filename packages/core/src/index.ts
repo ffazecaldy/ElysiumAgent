@@ -28,6 +28,7 @@ export * from "./providers/registry";
 export * from "./providers/openai-compatible";
 // Tool system
 export * from "./tools/registry";
+export * from "./tools/isolation";
 export * from "./tools/policy";
 export * from "./tools/builtins/read";
 export * from "./tools/builtins/write";
