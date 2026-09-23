@@ -88,9 +88,11 @@ describe("probe regressions: substitution and inline interpreters (B2/B3)", () =
     expect(["DENY", "REQUIRE_APPROVAL"]).toContain(r.verdict);
   });
 
-  it("still allows file-shaped interpreter usage", () => {
+  it("still allows file-shaped interpreter usage (except script files — F-06)", () => {
     expect(checkBashCommand(openPolicy, "bash build.sh").verdict).toBe("ALLOW");
-    expect(checkBashCommand(openPolicy, "node script.js").verdict).toBe("ALLOW");
+    // F-06: `node script.js` executes a workspace-staged file the gate cannot
+    // inspect — now APPROVE (the live SEC03 bypass class).
+    expect(checkBashCommand(openPolicy, "node script.js").verdict).toBe("REQUIRE_APPROVAL");
     expect(checkBashCommand(openPolicy, "python -m pytest").verdict).toBe("ALLOW");
   });
 });

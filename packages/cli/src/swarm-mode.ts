@@ -762,6 +762,21 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
       // BLOCK/APPROVE never execute (swarm has no interactive approver);
       // the command the model sees is the policy reason.
       if (call.name === "bash" && typeof call.arguments.command === "string") {
+        // Optional command trace (ELYSIUM_CMD_TRACE=<file>): every bash command
+        // the model issues is appended before the gate decides — security
+        // forensics for bypass analysis. Env-gated, append-only, never throws.
+        const cmdTraceFile = process.env.ELYSIUM_CMD_TRACE;
+        if (cmdTraceFile !== undefined && cmdTraceFile.length > 0) {
+          const { appendFileSync } = await import("node:fs");
+          try {
+            appendFileSync(
+              cmdTraceFile,
+              `${new Date().toISOString()}\t${task.id}\t${String(call.arguments.command)}\n`,
+            );
+          } catch {
+            // tracing is best-effort diagnostics
+          }
+        }
         const gate = gateBashCommand(effectiveBashPolicy, call.arguments.command, workspace);
         if (gate.action === "BLOCK" || gate.action === "APPROVE") {
           // F-02: the enforcement event itself is evidence (policy source),

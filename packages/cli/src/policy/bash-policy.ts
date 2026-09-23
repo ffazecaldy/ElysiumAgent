@@ -34,6 +34,9 @@ export interface BashCommandCheck {
 
 const NETWORK_COMMANDS = new Set(["curl", "wget", "nc", "ssh", "ftp", "telnet"]);
 
+/** F-05: dedicated DNS tools — network-capable, denied when network=false. */
+const DNS_COMMANDS = new Set(["nslookup", "dig", "host", "resolvectl", "dnsdomainname"]);
+
 const SHELL_INTERPRETERS = new Set(["sh", "bash", "zsh", "dash"]);
 
 interface DenyPattern {
@@ -67,6 +70,18 @@ const BUILTIN_DENY_PATTERNS: DenyPattern[] = [
   { tokens: ["cmd", "/c", "erase"], reason: "destructive 'cmd /c erase' is denied" },
   { tokens: ["rmdir", "/s"], reason: "destructive 'rmdir /s' is denied" },
   { tokens: ["rd", "/s"], reason: "destructive 'rd /s' is denied" },
+  // F-06 (composition class): `rm file && rmdir dir` composes two weak
+  // primitives into the recursive deletion that is denied as `rm -rf`.
+  // POSIX `rmdir` only removes EMPTY dirs — but in composition with any `rm`
+  // in the same command it becomes the recursive delete. Any `rmdir`/`rd`
+  // (POSIX spelling) therefore requires approval; `rm file` stays allowed
+  // standalone (documented parity: only recursive rm is denied directly).
+  {
+    tokens: ["rmdir"],
+    reason:
+      "'rmdir' requires approval (empty-dir deletion composes with 'rm' into recursive deletion — F-06)",
+  },
+  { tokens: ["rd"], reason: "'rd' requires approval (rmdir alias — F-06 composition class)" },
 ];
 
 /** Split a command into chain segments on `&&`, `||`, `;`, `|` and newline. */
@@ -755,6 +770,17 @@ function indirectionFormReason(segment: string): string | null {
   if (segment.includes("`")) {
     return "command substitution backticks require approval (embedded code is re-checked statically)";
   }
+  // F-06 (live SEC03): interpreters executing a SCRIPT FILE staged inside the
+  // workspace (`node cleanup-src.cjs`, `python delete.py`, `node ./x.mjs`).
+  // The command line is syntactically innocent — the danger lives in the file
+  // content, which the gate cannot statically inspect. The model staged the
+  // file with the write tool, then ran it. Script files require approval in
+  // every context (REPL: operator decides; swarm: refused by contract).
+  const SCRIPT_EXEC_RE =
+    /^(?:sudo\s+|command\s+|env\s+)?(?:node|nodejs|deno|bun|ts-node|tsx|python|python3|py|perl|ruby|php)\s+(?:-\w+\s+)*[./\\'"A-Za-z0-9_-]+\.(?:c?js|mjs|cjs|mts|ts|py|pyw|rb|pl|php)\b/i;
+  if (SCRIPT_EXEC_RE.test(segment.trim())) {
+    return "interpreter running a script file requires approval (file content is not statically inspectable — stage-then-execute bypass class F-06)";
+  }
   // Parameter/expansion forms the tokenizer cannot see through ($IFS word
   // splitting, ${…} substitution, brace expansion). Only refuse them when
   // they sit on a deny-relevant head word — benign usages keep working.
@@ -854,6 +880,18 @@ export function checkBashCommand(
       const base = commandBase(tokenizeSegment(segment));
       if (NETWORK_COMMANDS.has(base)) {
         return { verdict: "DENY", reason: `network command not allowed: ${base}` };
+      }
+    }
+  }
+
+  // (1b) F-05: dedicated DNS tools are network-capable regardless of the
+  // networkAllowed flag context — they are denied with the same rule as the
+  // NETWORK_COMMANDS family (they resolve/querY DNS directly).
+  if (!policy.networkAllowed) {
+    for (const segment of segments) {
+      const base = commandBase(tokenizeSegment(segment));
+      if (DNS_COMMANDS.has(base)) {
+        return { verdict: "DENY", reason: `DNS command not allowed: ${base}` };
       }
     }
   }

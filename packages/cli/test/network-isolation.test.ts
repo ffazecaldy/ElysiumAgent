@@ -32,11 +32,11 @@ describe("network gate matrix (networkAllowed=false)", () => {
     );
   });
 
-  it("FINDING F-05 (P1, unfixed by design this phase): dedicated DNS tools are RUN today", () => {
-    // Documented gap: nslookup/dig/host are NOT in the network denylist.
-    // This test pins CURRENT behavior so the fix flips it intentionally.
-    expect(verdict("nslookup example.com")).toBe("RUN");
-    expect(verdict("dig example.com")).toBe("RUN");
+  it("F-05 FIXED: dedicated DNS tools are BLOCK when networkAllowed=false", () => {
+    // Fixed this phase: nslookup/dig/host joined the denied network family.
+    expect(verdict("nslookup example.com")).toBe("BLOCK");
+    expect(verdict("dig example.com")).toBe("BLOCK");
+    expect(verdict("host example.com")).toBe("BLOCK");
   });
 
   it("non-network commands stay RUN", () => {

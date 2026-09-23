@@ -159,7 +159,9 @@ describe("allowed prefixes", () => {
     expect(checkBashCommand({ ...openPolicy, allowed: [] }, "anything --at --all").verdict).toBe(
       "ALLOW",
     );
-    expect(checkBashCommand(openPolicy, "node script.js").verdict).toBe("ALLOW");
+    // F-06: script-file execution is now REQUIRE_APPROVAL even with empty allowed.
+    expect(checkBashCommand(openPolicy, "node script.js").verdict).toBe("REQUIRE_APPROVAL");
+    expect(checkBashCommand(openPolicy, "echo anything --at --all").verdict).toBe("ALLOW");
   });
 
   it("matches prefix tokens, ignoring env assignments", () => {
