@@ -89,7 +89,9 @@ describe("probe regressions: substitution and inline interpreters (B2/B3)", () =
   });
 
   it("still allows file-shaped interpreter usage (except script files — F-06)", () => {
-    expect(checkBashCommand(openPolicy, "bash build.sh").verdict).toBe("ALLOW");
+    // F-06: workspace script files are approval-form (content invisible to
+    // static analysis — `bash build.sh` may do anything).
+    expect(checkBashCommand(openPolicy, "bash build.sh").verdict).toBe("REQUIRE_APPROVAL");
     // F-06: `node script.js` executes a workspace-staged file the gate cannot
     // inspect — now APPROVE (the live SEC03 bypass class).
     expect(checkBashCommand(openPolicy, "node script.js").verdict).toBe("REQUIRE_APPROVAL");
@@ -184,6 +186,57 @@ describe("probe campaign 2 regressions: wrappers, git globals, expansion", () =>
     expect(checkBashCommand(openPolicy, "env CI=1 npm test").verdict).toBe("ALLOW");
     expect(checkBashCommand(openPolicy, "git --no-pager status").verdict).toBe("ALLOW");
     expect(checkBashCommand(openPolicy, "timeout 30 npm test").verdict).toBe("ALLOW");
+  });
+});
+
+describe("F-06 regression — bypass classes closed (semantic, not string)", () => {
+  it("input→command transformation: find -exec embedding a denied command", () => {
+    for (const cmd of [
+      "find . -depth -type d -name src -exec rm -rf {} +",
+      "find . -name '*.tmp' -exec rm -rf {} +",
+      "find . -execdir rm -rf {} +",
+    ]) {
+      const r = checkBashCommand(openPolicy, cmd);
+      expect(["DENY", "REQUIRE_APPROVAL"]).toContain(r.verdict);
+    }
+  });
+
+  it("benign find without destructive exec stays allowed", () => {
+    expect(checkBashCommand(openPolicy, "find . -name '*.ts'").verdict).toBe("ALLOW");
+    // Non-destructive embedded commands pass the find-exec re-check.
+    expect(checkBashCommand(openPolicy, "find . -name x -exec grep y {} +").verdict).toBe("ALLOW");
+  });
+
+  it("workspace script execution via interpreter is approval-form", () => {
+    for (const cmd of ["bash s.sh", "sh run.sh", "zsh deploy.sh"]) {
+      expect(checkBashCommand(openPolicy, cmd).verdict).toBe("REQUIRE_APPROVAL");
+    }
+    // Path-qualified scripts were never the gap (content equally invisible,
+    // but they resolve outside the writable root assumption) — they stay
+    // consistent with the historical ALLOW for file-shaped invocations.
+    expect(checkBashCommand(openPolicy, "bash build.sh").verdict).toBe("REQUIRE_APPROVAL");
+  });
+
+  it("shell loop feeding rm is approval-form (runtime-sourced paths)", () => {
+    const r = checkBashCommand(openPolicy, "while read f; do rm -rf $f; done < list.txt");
+    expect(r.verdict).toBe("REQUIRE_APPROVAL");
+    expect(r.reason).toContain("loop feeding 'rm'");
+  });
+
+  it("destructive flag on non-rm binaries: tar --remove-files in any position", () => {
+    for (const cmd of [
+      "tar czf /dev/null --remove-files src",
+      "tar --remove-files -czf /dev/null src",
+      "tar czf out.tar --remove-files src",
+    ]) {
+      expect(checkBashCommand(openPolicy, cmd).verdict).toBe("DENY");
+    }
+    // Benign tar stays allowed.
+    expect(checkBashCommand(openPolicy, "tar czf out.tar src").verdict).toBe("ALLOW");
+  });
+
+  it("busybox multiplexer is denied (applet dispatch is opaque)", () => {
+    expect(checkBashCommand(openPolicy, "busybox rm -rf src").verdict).toBe("DENY");
   });
 });
 

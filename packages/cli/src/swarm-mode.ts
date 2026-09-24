@@ -61,6 +61,7 @@ import {
   buildCriticPostcondition,
   buildRollbackPostcondition,
   createEvaluationRuntime,
+  extractFinalClaim,
 } from "./evaluation";
 import { computeTaskOutcome } from "./evaluation/task-outcome";
 import { createLearningEngine } from "./learning";
@@ -1023,17 +1024,38 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
       });
       return verdict;
     } catch (error: unknown) {
-      // Surface the provider failure, then rethrow: the Orchestrator captures
-      // critic rejections as a failed verdict feeding the bounded repair loop.
+      // F-07: a critic PROVIDER failure is "unavailable", not "task failed".
+      // The frozen CriticVerdict cannot carry UNKNOWN, so the fail-open shape
+      // (passed=true) carries an explicit UNKNOWN gap marker that the
+      // evaluation layer records as an unverifiable postcondition (ok=null).
+      // The objective builder status governs the run; no repair round is
+      // burned on an infrastructure problem.
+      const message = errorMessage(error);
+      lastCriticPassed = null;
+      evaluationRuntime?.observe({
+        kind: "critic_verdict",
+        source: "critic",
+        facts: { passed: null, unavailable: true, confidence: 0 },
+      });
+      evaluationRuntime?.observe({
+        kind: "postcondition_check",
+        source: "critic",
+        facts: {
+          name: "critic-verified",
+          ok: null,
+          expected: { passed: true },
+          observed: { unavailable: true },
+        },
+      });
       emitSwarm({
         type: "error",
         data: {
           taskId: task.id,
           scope: "critic",
-          message: `critic LLM call failed: ${errorMessage(error)}`,
+          message: `critic unavailable (UNKNOWN): ${message}`,
         },
       });
-      throw error;
+      return { passed: true, gaps: [`critic unavailable (UNKNOWN): ${message}`] };
     }
   };
 
@@ -1073,25 +1095,37 @@ export async function runSwarmGoal(opts: RunSwarmGoalOptions): Promise<SwarmGoal
         try {
           const status = (event.data as { status?: unknown }).status;
           const data = event.data as { summary?: unknown };
-          // F-02: capture the builder's claim. The harness event carries the
-          // deterministic `status`; when the orchestrator forwards the final
-          // assistant text in `summary`, prefer the real text (richer than the
-          // synthetic "task X success" string).
-          if (typeof data.summary === "string" && data.summary.trim().length > 0) {
-            lastBuilderClaim = data.summary.trim();
-          } else if (status === "pass" || status === "partial") {
-            lastBuilderClaim = `task ${String(event.taskId)} success`;
-          } else if (status === "fail") {
-            lastBuilderClaim = "task failed";
+          // F-08: the agent CLAIM comes ONLY from the final assistant summary
+          // (extractFinalClaim classifies it: SUCCESS/FAILURE/UNVERIFIED/NONE).
+          // Intermediate narration and the harness `status` never fabricate a
+          // claim — the synthetic "task X success" string is gone.
+          const finalSummary =
+            typeof data.summary === "string" && data.summary.trim().length > 0
+              ? data.summary.trim()
+              : null;
+          const extracted = extractFinalClaim({ finalSummary });
+          if (extracted.claim !== "NONE") {
+            lastBuilderClaim = finalSummary ?? `status:${String(status ?? "")}`;
+          } else if (finalSummary !== null) {
+            // Keep the text for evidence, but without claim semantics.
+            lastBuilderClaim = "";
           }
           evaluationRuntime?.observe({
             kind: "claim",
             source: "tool",
-            facts: { taskId: event.taskId, status: String(status ?? "") },
+            facts: {
+              taskId: event.taskId,
+              status: String(status ?? ""),
+              claimKind: extracted.claim,
+              claimConfidence: extracted.confidence,
+              claimSource: extracted.source,
+            },
             claim:
-              status === "pass" || status === "partial"
-                ? `task ${String(event.taskId)} success`
-                : undefined,
+              extracted.claim === "SUCCESS"
+                ? (finalSummary ?? undefined)
+                : extracted.claim === "FAILURE"
+                  ? (finalSummary ?? undefined)
+                  : undefined,
           });
           void data;
           evaluationRuntime?.observe({

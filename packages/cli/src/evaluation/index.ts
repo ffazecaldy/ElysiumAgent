@@ -25,6 +25,15 @@ export {
   evaluateEvidence,
 } from "./evaluate";
 export {
+  extractFinalClaim,
+  isFailureClaim,
+  successClaimText,
+  type ClaimSource,
+  type ClaimVerdict,
+  type FinalClaim,
+  type FinalClaimInput,
+} from "./claim";
+export {
   type ComponentState,
   computeTaskOutcome,
   type TaskOutcomeInput,

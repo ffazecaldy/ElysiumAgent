@@ -82,6 +82,16 @@ const BUILTIN_DENY_PATTERNS: DenyPattern[] = [
       "'rmdir' requires approval (empty-dir deletion composes with 'rm' into recursive deletion — F-06)",
   },
   { tokens: ["rd"], reason: "'rd' requires approval (rmdir alias — F-06 composition class)" },
+  // F-06 class 3 — destructive flag on a NON-rm binary: `tar --remove-files`
+  // deletes its inputs after archiving. Same semantic class as `rm -rf`.
+  { tokens: ["tar", "--remove-files"], reason: "destructive 'tar --remove-files' is denied" },
+  // busybox is a multiplexer (`busybox rm -rf src` dispatches the applet):
+  // approval form rather than pretending the deny list sees through it.
+  {
+    tokens: ["busybox"],
+    reason:
+      "'busybox' multiplexer requires approval (applet dispatch is opaque to static analysis)",
+  },
 ];
 
 /** Split a command into chain segments on `&&`, `||`, `;`, `|` and newline. */
@@ -338,7 +348,10 @@ function commandBase(tokens: string[]): string {
 /** Token-aware pattern match anchored at the command head (after leading
  * `VAR=...` assignments): the pattern must match token-for-token from there,
  * so `echo git push` is NOT a `git push`. Single-token patterns therefore
- * match the base command only. */
+ * match the base command only. Patterns whose FIRST token is a destructive
+ * binary name and whose SECOND is a `--long-flag` are matched GAP-TOLERANT:
+ * options/values may sit between the binary and the destructive flag
+ * (`tar czf /dev/null --remove-files src` — F-06 class 3). */
 function matchesPattern(loweredTokens: string[], pattern: string[]): boolean {
   if (pattern.length === 0) {
     return false;
@@ -348,6 +361,13 @@ function matchesPattern(loweredTokens: string[], pattern: string[]): boolean {
     start++;
   }
   if (start + pattern.length > loweredTokens.length) {
+    return false;
+  }
+  // Gap-tolerant destructive-flag matching (binary + destructive long flag).
+  if (pattern.length === 2 && pattern[1]?.startsWith("--") && loweredTokens[start] === pattern[0]) {
+    for (let i = start + 1; i < loweredTokens.length; i++) {
+      if (loweredTokens[i] === pattern[1]) return true;
+    }
     return false;
   }
   for (let j = 0; j < pattern.length; j++) {
@@ -767,6 +787,39 @@ function indirectionFormReason(segment: string): string | null {
   if (/\$\(/.test(segment)) {
     return "command substitution '$(...)' requires approval (embedded code is re-checked statically)";
   }
+  // F-06 class 1 — input→command transformation: `find … -exec CMD {} +`
+  // turns every matched path into an ARGUMENT of CMD. When CMD is a
+  // destructive remover, the gate must not bless the composition. Checked
+  // recursively: `find . -name x -exec rm -rf {} +` embeds `rm -rf …`.
+  const findExecRe = /-exec(dir)?\b([\s\S]*?)\+/g;
+  for (const m of segment.matchAll(findExecRe)) {
+    const embedded = (m[2] ?? "").trim();
+    if (embedded.length === 0) continue;
+    const nested = checkBashCommand(
+      {
+        denied: [],
+        writableRoots: ["/"],
+        networkAllowed: true,
+      },
+      embedded,
+    );
+    if (nested.verdict === "DENY") {
+      return `find -exec embeds a denied command ('${embedded.slice(0, 60)}') — input-to-command transformation requires approval`;
+    }
+  }
+  // F-06 class 2 — script-file execution from the writable workspace: the
+  // gate cannot see inside `bash s.sh`, and the script may have been written
+  // by an earlier segment of this very command. Execution of a workspace-
+  // writable script is therefore an indirection form (approval), while
+  // read-only locations stay allowed.
+  const scriptTokens = tokenizeSegment(segment).map((t) => shellResolve(unquote(t)));
+  const scriptBase = commandBase(scriptTokens.map((t) => t.toLowerCase()));
+  if (SHELL_INTERPRETERS.has(scriptBase) && scriptTokens.length >= 2) {
+    const arg = scriptTokens[1] ?? "";
+    if (!arg.startsWith("-") && !arg.includes("/") && !arg.includes("\\")) {
+      return `executing workspace script '${arg}' via ${scriptBase} requires approval (script content is not statically visible)`;
+    }
+  }
   if (segment.includes("`")) {
     return "command substitution backticks require approval (embedded code is re-checked statically)";
   }
@@ -874,6 +927,17 @@ export function checkBashCommand(
     return { verdict: "ALLOW" };
   }
 
+  // (0) F-06 class 2b — shell loop constructing commands from runtime input:
+  // `while read f; do rm -rf $f; done < list` builds the removed paths at
+  // runtime, so the token view cannot see them. Checked on the WHOLE command
+  // (splitSegments cannot preserve loop bodies across `;`/newlines).
+  if (/\b(while|for)\b[\s\S]*\bdo\b[\s\S]*\brm\b[\s\S]*\bdone\b/.test(command)) {
+    return {
+      verdict: "REQUIRE_APPROVAL",
+      reason: "loop feeding 'rm' requires approval (removed paths come from runtime input)",
+    };
+  }
+
   // (1) Network commands.
   if (!policy.networkAllowed) {
     for (const segment of segments) {
@@ -886,12 +950,18 @@ export function checkBashCommand(
 
   // (1b) F-05: dedicated DNS tools are network-capable regardless of the
   // networkAllowed flag context — they are denied with the same rule as the
-  // NETWORK_COMMANDS family (they resolve/querY DNS directly).
+  // NETWORK_COMMANDS family (they resolve/querY DNS directly). Wrapper
+  // unwrapping applies: `command nslookup x` / `env nslookup x` resolve to
+  // the same DNS query.
   if (!policy.networkAllowed) {
     for (const segment of segments) {
-      const base = commandBase(tokenizeSegment(segment));
-      if (DNS_COMMANDS.has(base)) {
-        return { verdict: "DENY", reason: `DNS command not allowed: ${base}` };
+      const tokens = tokenizeSegment(segment).map((t) => shellResolve(unquote(t)).toLowerCase());
+      const canonical = canonicalTokens(tokens);
+      for (const view of [canonical, tokens]) {
+        const base = commandBase(view);
+        if (DNS_COMMANDS.has(base)) {
+          return { verdict: "DENY", reason: `DNS command not allowed: ${base}` };
+        }
       }
     }
   }
