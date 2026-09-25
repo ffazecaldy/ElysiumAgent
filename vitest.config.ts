@@ -15,6 +15,9 @@ export default defineConfig({
       "@elysium/benchmarks": r("packages/benchmarks/src/index.ts"),
       "@elysium/cli": r("packages/cli/src/index.ts"),
     },
+    // benchmark support sources live outside packages/ but are imported by
+    // the offline comparison-layer tests (LIVE Campaign v2)
+    extensions: [".ts", ".mts", ".js"],
   },
   test: {
     include: ["packages/*/test/**/*.test.ts", "examples/**/*.test.ts"],
