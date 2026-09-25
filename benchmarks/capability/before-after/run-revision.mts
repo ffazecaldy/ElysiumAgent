@@ -32,9 +32,10 @@ const LIVE = process.env.ELYSIUM_CAMPAIGN_LIVE === "1";
 const harness = await import(
   pathToFileURL(path.join(harnessRoot, "packages/cli/src/swarm-mode.ts")).href
 );
-const runSwarmGoal = harness.runSwarmGoal as typeof import(
-  "../../../packages/cli/src/swarm-mode",
-)["runSwarmGoal"];
+type RunSwarmGoalFn = (
+  opts: Parameters<typeof import("../../../packages/cli/src/swarm-mode")["runSwarmGoal"]>[0],
+) => ReturnType<typeof import("../../../packages/cli/src/swarm-mode")["runSwarmGoal"]>;
+const runSwarmGoal = harness.runSwarmGoal as RunSwarmGoalFn;
 type SwarmEvent = import("../../../packages/cli/src/swarm-mode").SwarmEvent;
 
 // benchmark corpus/tools ALWAYS candidate (identical across legs by hash)

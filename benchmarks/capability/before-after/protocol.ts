@@ -8,6 +8,7 @@
  */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 
 /** Campaign protocol identifier — bump ONLY when the protocol itself changes
@@ -25,8 +26,11 @@ export const PROTOCOL = {
   reps: 1,
   maxSubtasks: 1,
   providerKind: "live" as const,
-  /** per-run wall-clock budget guard (ms) — same for both legs */
-  runTimeoutMs: 600_000,
+  /** WHOLE-LEG wall-clock budget (ms). Measured LIVE v1 cadence: ~150s/run
+   * (max observed 297s) → 36 runs ≈ 90 min. Budget = 36 × 300s worst-case
+   * = 3h per leg; the guard exists to bound a hung provider, not to cut a
+   * slow-but-progressing leg (ETIMEDOUT at 10min killed a healthy leg). */
+  runTimeoutMs: 10_800_000,
   /** deterministic phases: baseline only; adaptive phase is out of scope for
    * the LIVE legs (documented runner behavior: adaptive skipped in --live) */
   adaptivePhase: false,
@@ -80,7 +84,7 @@ export function configHashOf(repoRoot: string): string {
 }
 
 function git(repoRoot: string, args: string[]): string {
-  // lazy import keeps this module loadable in vitest browser-ish contexts
+  const require = createRequire(import.meta.url);
   const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
   try {
     return execFileSync("git", args, { cwd: repoRoot, encoding: "utf8" }).trim();
@@ -100,7 +104,7 @@ export function buildCapsule(
     protocolId: CAMPAIGN_PROTOCOL_ID,
     os: {
       platform: process.platform,
-      release: require("node:os").release(),
+      release: createRequire(import.meta.url)("node:os").release(),
       arch: process.arch,
     },
     runtime: { node: process.version },

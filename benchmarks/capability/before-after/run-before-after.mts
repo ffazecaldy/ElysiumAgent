@@ -16,6 +16,7 @@
  * No TYPESAFE_API_KEY / Jev requirement: DecisionProvider stays off (§11).
  */
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { CAMPAIGN_PROTOCOL_ID, CAMPAIGN_VERSION, PROTOCOL, buildCapsule } from "./protocol";
@@ -46,6 +47,7 @@ fs.mkdirSync(path.join(outRoot, "before"), { recursive: true });
 fs.mkdirSync(path.join(outRoot, "after"), { recursive: true });
 
 function git(args: string[], cwd = repoRoot): string {
+  const require = createRequire(import.meta.url);
   const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
   try {
     return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -97,7 +99,7 @@ function resolveRef(ref: string): { sha: string; short: string; worktree: string
   // non-HEAD ref → temporary worktree (non-destructive)
   const wt = path.join(
     process.env.ELYSIUM_BENCH_WT ?? path.join(process.env.TEMP ?? "/tmp", "elysium-bench-wt"),
-    sha.slice(0, 12),
+    sha.slice(0, 7), // match the legacy manual worktree name (reuse it)
   );
   if (!fs.existsSync(path.join(wt, "package.json"))) {
     git(["worktree", "add", wt, sha]);
@@ -135,6 +137,7 @@ async function runLeg(
     "before-after",
     "run-revision.mts",
   );
+  const require = createRequire(import.meta.url);
   const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
   const outFile = path.join(outRoot, leg, "revision-run.json");
   const env: NodeJS.ProcessEnv = {
@@ -150,7 +153,11 @@ async function runLeg(
     ELYSIUM_CMD_TRACE: path.join(outRoot, leg, "cmd-trace.tsv"),
   };
   try {
-    execFileSync("npx", ["tsx", "--tsconfig", "tsconfig.base.json", runnerEntry], {
+    // Windows: bare `npx` is a .cmd shim → spawnSync ENOENT. Resolve the real
+    // tsx entry via the current node + the tsx CLI script from THIS tree's
+    // node_modules (both legs share identical devDependencies by lockfile).
+    const tsxCli = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
+    execFileSync(process.execPath, [tsxCli, "--tsconfig", "tsconfig.base.json", runnerEntry], {
       cwd: dir,
       env,
       encoding: "utf8",
