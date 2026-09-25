@@ -112,6 +112,9 @@ importers:
       '@elysium/core':
         specifier: workspace:*
         version: link:packages/core
+      '@elysium/meta-layer':
+        specifier: workspace:*
+        version: link:packages/meta-layer
     devDependencies:
       '@biomejs/biome':
         specifier: ^1.9.4

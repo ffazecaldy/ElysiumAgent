@@ -30,6 +30,7 @@
     "vitest": "^2.1.8"
   },
   "dependencies": {
-    "@elysium/core": "workspace:*"
+    "@elysium/core": "workspace:*",
+    "@elysium/meta-layer": "workspace:*"
   }
 }
