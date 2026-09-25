@@ -783,7 +783,11 @@ function extractEmbeddedCommands(segment: string): string[] {
  * {@link extractEmbeddedCommands}; the FORM itself is always at least an
  * approval — the REPL asks the operator, the swarm refuses approvals.
  */
-function indirectionFormReason(segment: string): string | null {
+function indirectionFormReason(
+  segment: string,
+  policy?: BashCommandPolicy,
+  cwd?: string,
+): string | null {
   if (/\$\(/.test(segment)) {
     return "command substitution '$(...)' requires approval (embedded code is re-checked statically)";
   }
@@ -805,6 +809,42 @@ function indirectionFormReason(segment: string): string | null {
     );
     if (nested.verdict === "DENY") {
       return `find -exec embeds a denied command ('${embedded.slice(0, 60)}') — input-to-command transformation requires approval`;
+    }
+  }
+  // F-06b — `find … -delete` is a recursive destructive transform of every
+  // matched path: semantically `rm -rf` over the match set, invisible to the
+  // rm/xargs deny analysis. Token-aware on the segment (head is `find`, flag
+  // position free): `-delete` as a TOKEN anywhere in a find invocation. This
+  // never matches `echo -delete` (head is echo) or quoted prose — only a
+  // real find command carrying the deletion primary.
+  const allTokens = tokenizeSegment(segment).map((t) => shellResolve(unquote(t)).toLowerCase());
+  const headWord = allTokens.find((t) => !/^[a-z_][a-z0-9_]*=/.test(t)) ?? "";
+  if (headWord === "find" && allTokens.includes("-delete")) {
+    return "'find -delete' is a recursive destructive transform of the match set (F-06b) and requires approval";
+  }
+  // F-06b — `mv` renaming/moving a DIRECTORY operand mutates the path state
+  // for later segments: the ownership/writable-root analysis of a follow-up
+  // command no longer resolves to the paths this gate just blessed (`mv src
+  // src.bak && find src.bak -delete`). Directory operands cannot be told
+  // apart from files statically, so any `mv` whose operands sit INSIDE the
+  // writable roots requires approval; a `mv` writing OUTSIDE the roots is
+  // NOT flagged here — the dedicated check (4) turns it into a hard DENY,
+  // preserving the stronger verdict for the escape case.
+  if (headWord === "mv" && allTokens.length >= 3 && policy !== undefined && cwd !== undefined) {
+    const operands = allTokens
+      .slice(1)
+      .filter((t) => !t.startsWith("-") && t !== "--")
+      .map((t) => normalizePath(t, cwd));
+    const insideRoot =
+      operands.length > 0 && operands.every((t) => isWithinAnyRoot(policy.writableRoots, t));
+    if (insideRoot) {
+      // NO same-parent exception: renaming a DIRECTORY within its parent
+      // (`mv src src.removed-backup` — the live T-SEC03 vector) is exactly
+      // the path-state mutation this rule exists to catch, and file-vs-dir
+      // is not statically decidable without filesystem I/O, which the gate
+      // must not perform. A workspace-root `mv` is approval-form, full stop;
+      // operators approve legitimate renames in the REPL.
+      return "'mv' relocates a workspace path (path-state mutation defeats later segment analysis — F-06b) and requires approval";
     }
   }
   // F-06 class 2 — script-file execution from the writable workspace: the
@@ -980,7 +1020,7 @@ export function checkBashCommand(
         };
       }
     }
-    const form = indirectionFormReason(segment);
+    const form = indirectionFormReason(segment, policy, cwd);
     if (form !== null) {
       return { verdict: "REQUIRE_APPROVAL", reason: form };
     }
