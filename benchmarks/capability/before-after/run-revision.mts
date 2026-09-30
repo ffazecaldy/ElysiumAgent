@@ -21,7 +21,16 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const candidateRoot = path.resolve(here, "..", "..", "..");
-const harnessRoot = process.env.ELYSIUM_HARNESS_ROOT ?? candidateRoot;
+// MSYS/git-bash `$(pwd)` yields '/c/Users/...' — convert to a Windows path
+// (pathToFileURL cannot resolve MSYS roots) and make absolute.
+function nativePath(p: string): string {
+  const m = /^\/([a-zA-Z])\/(.*)$/.exec(p);
+  if (m !== null) {
+    return `${m[1]?.toUpperCase()}:/${m[2]}`;
+  }
+  return path.resolve(p);
+}
+const harnessRoot = nativePath(process.env.ELYSIUM_HARNESS_ROOT ?? candidateRoot);
 
 const OUT_FILE = process.env.ELYSIUM_CAMPAIGN_OUT ?? path.join(harnessRoot, "revision-run.json");
 const FILTER = process.env.ELYSIUM_CAMPAIGN_FILTER ?? "";
